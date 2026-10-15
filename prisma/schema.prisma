@@ -29,10 +29,26 @@ model Tier {
 }
 
 // A shared unit pool.
-// `balance` is a CACHE of the sum of all ledger units (expired or not) for this pool.
-// It must only change in the same transaction that inserts a ledger row, under
-// SELECT ... FOR UPDATE on this row. Never read-modify-write it from app code.
-// `capacity` null = no limit.
+//
+// `balance` is a CACHE of the sum of ALL ledger units for this pool, expired or not
+// (a lifetime net total, useful for reconciliation). It must only change in the same
+// transaction that inserts a ledger row, under SELECT ... FOR UPDATE on this row.
+// Never read-modify-write it from app code.
+//
+// `capacity` (null = no limit) is measured in ACTIVE units, the same measure operator
+// status uses: units whose expiresAt is null or in the future. An expired allocation no
+// longer holds anything, so it does not count against capacity. DECISION: the capacity
+// check must NOT use `balance`.
+//   - Active units are computed from the ledger at insert time: SUM(units) for this pool
+//     WHERE expiresAt IS NULL OR expiresAt > now, with `now` injected.
+//   - Run the check inside the same transaction, after taking the pool row lock, so
+//     concurrent writers are serialized.
+//   - Expiry only ever lowers active units, so a concurrent expiry can free capacity
+//     but never use it up: the check cannot be wrong in the unsafe direction.
+//   - There is deliberately no cached "active balance": expiry happens with the passage
+//     of time, not through a write, so nothing would keep it current.
+// What happens when a new allocation would exceed capacity (reject or warn) is a
+// domain/product decision and is not made here.
 model Pool {
   id        String        @id @default(cuid())
   name      String        @unique
