@@ -14,7 +14,7 @@ enum Role {
 
 enum EntryKind {
   ALLOCATION
-  CORRECTION
+  ADJUSTMENT
 }
 
 // Operator tier. Controls how long an allocation lasts (null = never expires).
@@ -28,56 +28,76 @@ model Tier {
   @@map("tier")
 }
 
-model Operator {
-  id      String        @id @default(cuid())
-  name    String
-  role    Role          @default(OPERATOR)
-  tierId  String        @map("tier_id")
-  tier    Tier          @relation(fields: [tierId], references: [id])
-  entries LedgerEntry[]
-
-  @@map("operator")
-}
-
-// The shared unit pool. totalUnits is the sum of ALL ledger entries (expired or not);
-// it only ever changes in the same transaction that inserts a ledger row, under a row lock.
+// A shared unit pool.
+// `balance` is a CACHE of the sum of all ledger units (expired or not) for this pool.
+// It must only change in the same transaction that inserts a ledger row, under
+// SELECT ... FOR UPDATE on this row. Never read-modify-write it from app code.
+// `capacity` null = no limit.
 model Pool {
-  id         String        @id @default(cuid())
-  name       String        @unique
-  totalUnits BigInt        @default(0) @map("total_units")
-  updatedAt  DateTime      @updatedAt @map("updated_at")
-  entries    LedgerEntry[]
+  id        String        @id @default(cuid())
+  name      String        @unique
+  capacity  Int?
+  balance   Int           @default(0)
+  updatedAt DateTime      @updatedAt @map("updated_at")
+  operators Operator[]
+  entries   LedgerEntry[]
 
   @@map("pool")
 }
 
-// APPEND-ONLY. A database trigger rejects UPDATE and DELETE (see the migration).
-// Corrections are new rows (kind = CORRECTION) pointing at the entry they correct.
+model Operator {
+  id     String @id @default(cuid())
+  name   String
+  role   Role   @default(OPERATOR)
+  tierId String @map("tier_id")
+  poolId String @map("pool_id")
+  tier   Tier   @relation(fields: [tierId], references: [id])
+  pool   Pool   @relation(fields: [poolId], references: [id])
+
+  // Entries about this operator / entries this operator recorded (supervisors record adjustments).
+  entries  LedgerEntry[] @relation("EntryOperator")
+  recorded LedgerEntry[] @relation("EntryCreator")
+
+  // Target of the composite FK from LedgerEntry, which keeps entry.pool_id equal to operator.pool_id.
+  @@unique([id, poolId])
+  @@map("operator")
+}
+
+// APPEND-ONLY. A database trigger rejects UPDATE, DELETE and TRUNCATE (see migrations).
+// An adjustment is a new row (kind = ADJUSTMENT) whose refSeq points at the entry it adjusts.
 model LedgerEntry {
-  id             String    @id @default(cuid())
-  idempotencyKey String    @unique @map("idempotency_key")
+  seq            Int       @id @default(autoincrement())
   kind           EntryKind
   operatorId     String    @map("operator_id")
   poolId         String    @map("pool_id")
-  // Signed. Allocations are positive; corrections may be negative.
-  units          Int
-  // When it happened in the field (may be earlier than createdAt for flaky connections).
-  occurredAt     DateTime  @map("occurred_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  // Calculated once at creation from the operator's tier at that time. Never recomputed.
-  expiresAt      DateTime? @map("expires_at")
-  // Set for CORRECTION rows.
-  correctsId     String?   @map("corrects_id")
-  reason         String?
-  // Who recorded it (a supervisor for corrections).
   createdById    String    @map("created_by_id")
+  // Signed: allocations positive, adjustments may be negative. Never 0 (CHECK in migration).
+  units          Int
+  // When it happened in the field. May be earlier than recordedAt (flaky connections).
+  effectiveAt    DateTime  @map("effective_at")
+  // When the server recorded it.
+  recordedAt     DateTime  @default(now()) @map("recorded_at")
+  // Calculated once at creation from the operator's tier at that time; never recomputed. null = never.
+  expiresAt      DateTime? @map("expires_at")
+  // ADJUSTMENT only: the entry being adjusted.
+  refSeq         Int?      @map("ref_seq")
+  // Required for ADJUSTMENT (CHECK in migration).
+  reason         String?
+  // Client-generated; unique per creator so one client's retries can't collide with another's.
+  idempotencyKey String    @map("idempotency_key")
 
-  operator    Operator      @relation(fields: [operatorId], references: [id])
-  pool        Pool          @relation(fields: [poolId], references: [id])
-  corrects    LedgerEntry?  @relation("Corrections", fields: [correctsId], references: [id])
-  correctedBy LedgerEntry[] @relation("Corrections")
+  operator   Operator      @relation("EntryOperator", fields: [operatorId, poolId], references: [id, poolId])
+  pool       Pool          @relation(fields: [poolId], references: [id])
+  createdBy  Operator      @relation("EntryCreator", fields: [createdById], references: [id])
+  ref        LedgerEntry?  @relation("Adjustments", fields: [refSeq], references: [seq], onDelete: Restrict)
+  adjustedBy LedgerEntry[] @relation("Adjustments")
 
-  @@index([operatorId, occurredAt, id])
-  @@index([correctsId])
+  @@unique([createdById, idempotencyKey])
+  // Per-operator history, newest first / date range. seq breaks ties on equal effectiveAt.
+  @@index([operatorId, effectiveAt, seq])
+  // Pool feed and "everything after seq N" cursors.
+  @@index([poolId, seq])
+  // "What adjusted this entry?"
+  @@index([refSeq])
   @@map("ledger_entry")
 }
