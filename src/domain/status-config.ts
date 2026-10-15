@@ -2,7 +2,7 @@
  * Status cutoffs, measured in ACTIVE (non-expired) units.
  *
  * DEFAULTS: TO CONFIRM WITH CLIENT. This is the only place the numbers live;
- * components and handlers must derive status via `statusForActiveUnits`.
+ * components and handlers must derive status via `deriveStatus`.
  *
  * Each value is the inclusive lower bound of that level. Anything below
  * LOW's bound (including negative totals) is CRITICAL.

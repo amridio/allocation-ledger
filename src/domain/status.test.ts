@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { statusForActiveUnits } from "./status";
+import { deriveStatus } from "./status";
 
 // Literal numbers on purpose: these pin the current defaults (to confirm with
 // client). If the client changes the cutoffs, update status-config.ts AND these.
-describe("statusForActiveUnits", () => {
+describe("deriveStatus", () => {
   it.each([
     [-5, "CRITICAL"],
     [0, "CRITICAL"],
@@ -14,7 +14,13 @@ describe("statusForActiveUnits", () => {
     [99, "NORMAL"],
     [100, "HIGH"],
     [5000, "HIGH"],
-  ] as const)("%i units -> %s", (units, expected) => {
-    expect(statusForActiveUnits(units)).toBe(expected);
+  ] as const)("%i units -> %s", (balance, expected) => {
+    expect(deriveStatus(balance)).toBe(expected);
+  });
+
+  it("treats a fractional value just under a cutoff as the lower level", () => {
+    expect(deriveStatus(19.999)).toBe("CRITICAL");
+    expect(deriveStatus(49.999)).toBe("LOW");
+    expect(deriveStatus(99.999)).toBe("NORMAL");
   });
 });
