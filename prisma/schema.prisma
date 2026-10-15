@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OPERATOR
+  SUPERVISOR
+}
+
+enum StatusLevel {
+  CRITICAL
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum EntryKind {
+  ALLOCATION
+  CORRECTION
+}
+
+// Operator tier. Controls how long an allocation lasts (null = never expires).
+model Tier {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  expiryHours Int?       @map("expiry_hours")
+  operators   Operator[]
+
+  @@map("tier")
+}
+
+// Status = highest level whose minUnits <= operator's running total.
+// One row per level; the lowest level should have a very negative minUnits.
+model StatusThreshold {
+  level    StatusLevel @id
+  minUnits Int         @map("min_units")
+
+  @@map("status_threshold")
+}
+
+model Operator {
+  id      String        @id @default(cuid())
+  name    String
+  role    Role          @default(OPERATOR)
+  tierId  String        @map("tier_id")
+  tier    Tier          @relation(fields: [tierId], references: [id])
+  entries LedgerEntry[]
+
+  @@map("operator")
+}
+
+// The shared unit pool. totalUnits is the sum of ALL ledger entries (expired or not);
+// it only ever changes in the same transaction that inserts a ledger row, under a row lock.
+model Pool {
+  id         String        @id @default(cuid())
+  name       String        @unique
+  totalUnits BigInt        @default(0) @map("total_units")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+  entries    LedgerEntry[]
+
+  @@map("pool")
+}
+
+// APPEND-ONLY. A database trigger rejects UPDATE and DELETE (see the migration).
+// Corrections are new rows (kind = CORRECTION) pointing at the entry they correct.
+model LedgerEntry {
+  id             String    @id @default(cuid())
+  idempotencyKey String    @unique @map("idempotency_key")
+  kind           EntryKind
+  operatorId     String    @map("operator_id")
+  poolId         String    @map("pool_id")
+  // Signed. Allocations are positive; corrections may be negative.
+  units          Int
+  // When it happened in the field (may be earlier than createdAt for flaky connections).
+  occurredAt     DateTime  @map("occurred_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  // Calculated once at creation from the operator's tier at that time. Never recomputed.
+  expiresAt      DateTime? @map("expires_at")
+  // Set for CORRECTION rows.
+  correctsId     String?   @map("corrects_id")
+  reason         String?
+  // Who recorded it (a supervisor for corrections).
+  createdById    String    @map("created_by_id")
+
+  operator    Operator      @relation(fields: [operatorId], references: [id])
+  pool        Pool          @relation(fields: [poolId], references: [id])
+  corrects    LedgerEntry?  @relation("Corrections", fields: [correctsId], references: [id])
+  correctedBy LedgerEntry[] @relation("Corrections")
+
+  @@index([operatorId, occurredAt, id])
+  @@index([correctsId])
+  @@map("ledger_entry")
+}
