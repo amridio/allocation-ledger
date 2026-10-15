@@ -1,8 +1,11 @@
 import { adjustBodySchema } from "@/domain/adjustment";
 import { adjust } from "../adjust";
+import { requireAccessibleOperator } from "./access";
 import { requireRole, requireUser } from "./auth";
 import type { ApiContext } from "./context";
 import { failureError, jsonResponse, route } from "./errors";
+import { getMetricDto } from "../queries/metric";
+import { toEntryDto } from "../queries/entries";
 import { readIdempotencyKey, readJsonBody } from "./request";
 
 /** POST /api/adjustments: the logged-in supervisor adjusts an earlier allocation. */
@@ -14,5 +17,8 @@ export const createAdjustment = route(async (request: Request, ctx: ApiContext) 
 
   const result = await adjust(ctx, { supervisorId: user.id, ...body, idempotencyKey });
   if (!result.ok) throw failureError(result.reason);
-  return jsonResponse({ replay: result.replay, entry: result.entry }, { status: result.replay ? 200 : 201 });
+  // The ADJUSTED operator's metric after the correction (the service guarantees they are in the supervisor's pool).
+  const subject = await requireAccessibleOperator(ctx.db, user, result.entry.operatorId);
+  const metric = await getMetricDto(ctx.db, subject, ctx.clock());
+  return jsonResponse({ replay: result.replay, entry: toEntryDto(result.entry), metric }, { status: result.replay ? 200 : 201 });
 });

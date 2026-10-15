@@ -129,6 +129,22 @@ describe("POST /api/entries", () => {
     expect(await ledger(w.poolId)).toMatchObject({ count: 1, balance: 25 });
   });
 
+  it("the response carries the operator's metric AFTER this write, so the screen can replace its guess with the server's figure", async () => {
+    const w = await world({ capacity: 500, expiryMinutes: 60 });
+    await give(w.op1, 10, "m-before", T0);
+    const res = await createEntry(request("/api/entries", { as: w.op1, key: "m-1", body: { units: 15 } }), ctx(minutes(T0, 5)));
+    expect((await res.clone().json()).metric).toMatchObject({
+      asOf: minutes(T0, 5).toISOString(),
+      operator: { id: w.op1, activeUnits: 25, status: "LOW" },
+      pool: { id: w.poolId, capacity: 500, activeUnits: 25, lifetimeBalance: 25 },
+      nextExpiryAt: minutes(T0, 60).toISOString(),
+    });
+    // a replay returns the CURRENT metric too, and does not add the units a second time
+    const replay = await createEntry(request("/api/entries", { as: w.op1, key: "m-1", body: { units: 15 } }), ctx(minutes(T0, 6)));
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).metric.operator.activeUnits).toBe(25);
+  });
+
   it("400 IDEMPOTENCY_KEY_REQUIRED without the header; nothing is written", async () => {
     const w = await world();
     const res = await createEntry(request("/api/entries", { as: w.op1, method: "POST", body: { units: 5 } }), ctx());
@@ -242,6 +258,16 @@ describe("POST /api/adjustments", () => {
       },
     });
     expect(await ledger(w.poolId)).toMatchObject({ count: 2, balance: 20 });
+  });
+
+  it("the response carries the ADJUSTED operator's metric after the adjustment", async () => {
+    const w = await world({ expiryMinutes: 60 });
+    const target = await give(w.op1, 30, "t-m");
+    const res = await createAdjustment(
+      request("/api/adjustments", { as: w.sup, key: "a-m", body: { targetSeq: target.seq, units: -10, reason: "Miscount" } }),
+      ctx(minutes(T0, 30)),
+    );
+    expect((await res.json()).metric).toMatchObject({ operator: { id: w.op1, activeUnits: 20, status: "LOW" } });
   });
 
   it("403 for an operator; nothing written", async () => {

@@ -38,7 +38,7 @@ describe("api client: requests", () => {
   });
 
   it("POST /api/entries sends the units as JSON and the key in the Idempotency-Key header", async () => {
-    const { calls, client } = fakeFetch(() => json({ replay: false, entry: { seq: 1 } }, 201));
+    const { calls, client } = fakeFetch(() => json({ replay: false, entry: { seq: 1 }, metric: { operator: { activeUnits: 25 } } }, 201));
     const result = await client.postEntry(25, "key-123");
     const call = calls[0]!;
     expect(call.url).toBe("/api/entries");
@@ -46,7 +46,7 @@ describe("api client: requests", () => {
     expect(new Headers(call.init.headers).get("Idempotency-Key")).toBe("key-123");
     expect(new Headers(call.init.headers).get("content-type")).toBe("application/json");
     expect(JSON.parse(call.init.body as string)).toEqual({ units: 25 });
-    expect(result).toEqual({ replay: false, entry: { seq: 1 } });
+    expect(result).toEqual({ replay: false, entry: { seq: 1 }, metric: { operator: { activeUnits: 25 } } });
   });
 
   it("POST /api/adjustments sends targetSeq, units and reason, with the key header", async () => {

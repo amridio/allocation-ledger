@@ -18,6 +18,8 @@ export class ApiClientError extends Error {
 export interface WriteResult {
   replay: boolean;
   entry: EntryDto;
+  /** The affected operator's metric after this write: the server's figure, to replace any optimistic guess. */
+  metric: MetricDto;
 }
 
 export interface EntriesRequest {

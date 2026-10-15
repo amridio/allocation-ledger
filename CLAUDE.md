@@ -37,6 +37,10 @@ Stack: Next.js (App Router), TypeScript, Prisma, Postgres (Docker), TanStack Que
 - Phone-first and readable in bright sunlight: high contrast (aim for 7:1 or better), large tap targets, large numerals, light theme by default.
 - Status is never conveyed by color alone. Each level has a distinct label and icon or shape.
 - Pending (not yet confirmed) entries must look visibly pending.
+- Sizes are written as explicit pixels, not rem (the root font is 18px): buttons and inputs at least 56px tall (48px is the floor), the metric number 72px, text 16px or larger. Colours come only from the tokens in `globals.css`; `src/ui/palette.test.ts` enforces 7:1 against the real tokens, so change a token and the test tells you.
+- The screen is rendered on the server (`instant = false`, no Suspense) so first open has no loading state; the page gets its data through `loadDashboard()` and the shared `src/server/queries/*`, never its own queries. Times are formatted in the fixed `APP_TIMEZONE`, never the device's.
+- After a write the screen replaces its optimistic number with the `metric` the server returned; it never adds to a number a poll may already have refreshed.
+- UI changes are verified with `npm run ui:check` (real Chromium, phone and desktop), not only by reading code. Run `npm run build` first, and never leave `next` servers running: stale ones silently serve an old build.
 
 ## Dependencies
 

@@ -57,3 +57,14 @@ describe("every API route applies the shared read-access rule (or is explicitly 
     }
   });
 });
+
+describe("the server-rendered page applies the same rule", () => {
+  it("app/page.tsx loads its data through loadDashboard(), which gets its subject operator from requireAccessibleOperator()", () => {
+    const page = readFileSync(path.join(process.cwd(), "src/app/page.tsx"), "utf8");
+    expect(page, "page.tsx must load data via loadDashboard").toMatch(/loadDashboard\(/);
+    expect(page, "page.tsx must not query ledger data itself").not.toMatch(/ledgerEntry|getMetricDto|getTimelineDto|getEntriesPageDto/);
+
+    const loader = readFileSync(path.join(process.cwd(), "src/server/dashboard.ts"), "utf8");
+    expect(loader).toMatch(/requireAccessibleOperator\(/);
+  });
+});

@@ -49,3 +49,21 @@ export function appendOlder(previous: OlderEntries | null, page: EntriesPageDto,
     nextCursor: page.nextCursor,
   };
 }
+
+export const PAGE_SIZE = 20;
+/** The API's cap on `limit`. */
+export const MAX_PAGE = 100;
+/** Extra rows the poll asks for, to absorb entries that arrive between two polls. */
+const POLL_MARGIN = 20;
+
+/**
+ * How many rows the poll should ask for. With no older pages loaded: exactly one page, so the log
+ * never grows by itself. With older pages loaded: enough to reach back from the newest entry to
+ * the older block (rows at or above its anchor) plus a margin for new arrivals, so the two stay
+ * contiguous. Rows below the anchor are NOT counted, otherwise the request would grow with every poll.
+ */
+export function headLimit(merged: readonly EntryDto[], older: OlderEntries | null): number {
+  if (older === null || older.entries.length === 0) return PAGE_SIZE;
+  const reach = merged.filter((entry) => entry.seq >= older.anchor).length;
+  return Math.min(MAX_PAGE, reach + POLL_MARGIN);
+}

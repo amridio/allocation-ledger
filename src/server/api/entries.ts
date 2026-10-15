@@ -1,7 +1,8 @@
 import { allocateBodySchema } from "@/domain/allocation";
 import { entriesQuerySchema } from "@/domain/queries";
 import { allocate } from "../allocate";
-import { getEntriesPageDto, type EntriesScope } from "../queries/entries";
+import { getEntriesPageDto, toEntryDto, type EntriesScope } from "../queries/entries";
+import { getMetricDto } from "../queries/metric";
 import { requireAccessibleOperator } from "./access";
 import { requireRole, requireUser } from "./auth";
 import type { ApiContext } from "./context";
@@ -17,7 +18,11 @@ export const createEntry = route(async (request: Request, ctx: ApiContext) => {
 
   const result = await allocate(ctx, { operatorId: user.id, units, idempotencyKey });
   if (!result.ok) throw failureError(result.reason);
-  return jsonResponse({ replay: result.replay, entry: result.entry }, { status: result.replay ? 200 : 201 });
+  // The operator's metric AFTER this write (or as it stands now, for a replay), so the screen can
+  // swap its optimistic guess for the server's exact figure instead of adding to a number that a
+  // poll may already have refreshed.
+  const metric = await getMetricDto(ctx.db, { id: user.id, name: user.name, poolId: user.poolId }, ctx.clock());
+  return jsonResponse({ replay: result.replay, entry: toEntryDto(result.entry), metric }, { status: result.replay ? 200 : 201 });
 });
 
 /**

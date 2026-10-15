@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EntriesPageDto, EntryDto } from "@/domain/wire";
-import { appendOlder, mergeEntries } from "./entries-merge";
+import { appendOlder, headLimit, mergeEntries } from "./entries-merge";
 
 const e = (seq: number): EntryDto => ({
   seq,
@@ -96,5 +96,36 @@ describe("appendOlder", () => {
     const first = appendOlder(null, page([6, 5], true), 7);
     const again = appendOlder(first, page([5, 4], true), 5);
     expect(seqsOf(again.entries)).toEqual([6, 5, 4]);
+  });
+});
+
+/*
+ * How many rows the poll should ask for. With nothing older loaded it is exactly one page: the log
+ * must NOT grow by itself (an earlier version asked for "loaded + margin", which counted its own
+ * result as loaded and so loaded everything, page after page, without the user asking).
+ */
+describe("headLimit", () => {
+  const rows = (seqs: number[]) => seqs.map(e);
+
+  it("with no older pages loaded it is exactly one page, however often it is asked", () => {
+    expect(headLimit(rows([20, 19, 18]), null)).toBe(20);
+    expect(headLimit(rows(Array.from({ length: 20 }, (_, i) => 100 - i)), null)).toBe(20);
+  });
+
+  it("with older pages loaded it reaches back over the head's rows plus a margin for new entries", () => {
+    const older = { anchor: 80, entries: rows([79, 78, 77]), nextCursor: 77 };
+    // 5 rows at or above the anchor (80) -> 5 + 20 margin
+    expect(headLimit(rows([84, 83, 82, 81, 80, 79, 78, 77]), older)).toBe(25);
+  });
+
+  it("counts only the rows above the anchor, so it does not grow just because older rows are loaded", () => {
+    const older = { anchor: 80, entries: rows(Array.from({ length: 30 }, (_, i) => 79 - i)), nextCursor: 50 };
+    const merged = rows([82, 81, 80, ...Array.from({ length: 30 }, (_, i) => 79 - i)]);
+    expect(headLimit(merged, older)).toBe(23); // 3 above the anchor + 20, not 33 + 20
+  });
+
+  it("never asks for more than the API allows (100)", () => {
+    const older = { anchor: 1, entries: rows([0]), nextCursor: null };
+    expect(headLimit(rows(Array.from({ length: 150 }, (_, i) => 200 - i)), older)).toBe(100);
   });
 });

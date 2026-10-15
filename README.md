@@ -47,6 +47,36 @@ npm run db:deploy && SEED_SHORT_EXPIRY=true npm run db:seed:demo
 
 Running a seed overwrites expiry for T1–T3, and the demo / short-expiry modes are refused when `NODE_ENV=production`. Never run a seed against production data.
 
+## The screen
+
+Open `http://localhost:3000`. It is built for phones in a bright warehouse, possibly worn with gloves.
+
+**Operators** (phone): the metric on top (active units as a 72px number with its status), the activity log below it, and a big **Log allocation** button pinned to the bottom edge. It opens a bottom sheet with a large numeric field, +1/+5/+10 buttons and a confirm button. **Desktop**: three columns: the form, the metric with its status history, the activity log.
+
+**Supervisors**: an operator picker, the **pool-wide** activity log, and the selected operator's full status history. Every allocation row has an **Adjust** button: choose *Remove* or *Add* units, enter the amount and a required reason. The history then shows exactly which points were **Recalculated** (an adjustment is dated at the entry it corrects, so only that moment and later change; earlier points never do).
+
+What you can rely on:
+
+- **No loading state on first open.** The page is rendered on the server (`instant = false`, no Suspense fallback), so the first HTML response already contains the numbers. A test fetches it with JavaScript off.
+- **Instant, and never wrong.** Logging shows the new total at once with a visible *Sending…* row and a dashed "includes N still sending" note. When the server confirms, its own figure (returned in the response) replaces the guess in a single update, so the number never dips or counts twice. A failed send shows **Not sent** with a **Retry** button that re-sends with the *same* `Idempotency-Key`, so a retry can never double count.
+- **Fresh.** While the tab is visible it polls every 3 s (`UI_POLL_MS`), every 30 s while hidden, and refetches on focus. Separately, the metric endpoint returns `nextExpiryAt`, and the screen schedules a refetch for that exact moment (against a clock anchored to the server's, so a phone with a wrong clock still expires entries at the right time), so the number and status change when an entry expires, not at the next poll.
+- **Status is never colour alone.** Every status is a colour *and* an icon with its own shape (octagon, down triangle, check circle, up triangle) *and* a word.
+- **Warehouse design rules:** dark text on white, no light-grey text, 7:1 contrast or better (a unit test reads the real colour tokens and fails if one breaks the rule), text 16px or larger, buttons and inputs at least 56px tall.
+
+### Environment variables for the screen
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `ENABLE_USER_SWITCHER` | **off** (anything but `true`) | The temporary "Switch user" screen **and** `POST /api/switch-user`. With it off, the endpoint answers 404 and the page just says sign-in isn't available. `.env.example` sets it to `true` for local work. Keep it off anywhere real data lives. |
+| `UI_POLL_MS` | `3000` | How often a visible screen polls (500 or more). |
+| `APP_TIMEZONE` | `UTC` | The IANA time zone times are shown in (for example `Europe/Berlin`). It is fixed, not "the device's zone", so the server-rendered page and the browser print identical text. |
+
+Each open screen makes about two small requests every 3 s (the metric and the newest page of the log). Keep that in mind when sizing the database pool for many simultaneous users.
+
+### Checking it in a real browser
+
+`npm run ui:check` (needs `npm run build` first) starts the production server against the `ops_test` database and drives Chromium (via `playwright-core`) at a phone size and a desktop size. It checks layout order, that every control is at least 48px tall, the contrast of every piece of text, that statuses carry an icon and a word, first open with JavaScript off, logging with a held-open request (the number must show exactly `5` then `25`, never flicker or double count), retry with the same key, the supervisor's adjustment recalculating the history, and the exact-moment expiry refetch. Screenshots go to `./ui-check-output`.
+
 ## Business defaults: TO CONFIRM WITH CLIENT
 
 The client has not given exact numbers yet. Everything below is a **placeholder default**.
@@ -92,7 +122,7 @@ All endpoints return JSON, are never cached (`Cache-Control: no-store`), and tak
 
 ### Auth (temporary)
 
-The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "userId": "…" }` sets it for any existing user (after `npm run db:seed:demo` try `demo_ada`, `demo_cho`, or the supervisor `demo_sup`). **Anyone can set that cookie to any id, so this identifies users but does not authenticate them.** Everything that needs "who is calling" goes through `requireUser()` in [`src/server/api/auth.ts`](./src/server/api/auth.ts), which is the one place to replace with real login.
+The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "userId": "…" }` sets it for any existing user, **but only when `ENABLE_USER_SWITCHER=true`** (default off; the endpoint is 404 otherwise) (after `npm run db:seed:demo` try `demo_ada`, `demo_cho`, or the supervisor `demo_sup`). **Anyone can set that cookie to any id, so this identifies users but does not authenticate them.** Everything that needs "who is calling" goes through `requireUser()` in [`src/server/api/auth.ts`](./src/server/api/auth.ts), which is the one place to replace with real login.
 
 ### Conventions
 
@@ -115,12 +145,12 @@ The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "u
 
 | Endpoint | Who | What |
 | -------- | --- | ---- |
-| `POST /api/entries` `{ units }` | operators | Log an allocation for yourself. `201` created, `200` replay. |
-| `POST /api/adjustments` `{ targetSeq, units, reason }` | supervisors | Adjust an earlier allocation in your own pool (signed, non-zero units; `reason` required; the entry can't drop below zero in total). The adjustment is dated at the target's `effectiveAt` and expires with it. `201` / `200`. |
+| `POST /api/entries` `{ units }` | operators | Log an allocation for yourself. `201` created, `200` replay. The response is `{ replay, entry, metric }`: `metric` is your metric **after** this write, which the screen uses to replace its optimistic guess. |
+| `POST /api/adjustments` `{ targetSeq, units, reason }` | supervisors | Adjust an earlier allocation in your own pool (signed, non-zero units; `reason` required; the entry can't drop below zero in total). The adjustment is dated at the target's `effectiveAt` and expires with it. `201` / `200`. The response also carries `metric` for the adjusted operator. |
 | `GET /api/entries?cursor=&limit=&operatorId=` | everyone | Newest first, paged by `seq`. Response `{ entries, nextCursor }`; pass `nextCursor` back as `cursor`; `null` = last page. `limit` is 1–100 (default 20). Operators see their own entries, supervisors their own pool (or one operator in it with `operatorId`). |
-| `GET /api/metric?operatorId=` | everyone | `{ asOf, operator: { activeUnits, status }, pool: { capacity, activeUnits, lifetimeBalance } }`. Supervisors may pass `operatorId` for an operator in their own pool. |
+| `GET /api/metric?operatorId=` | everyone | `{ asOf, operator: { activeUnits, status }, nextExpiryAt, pool: { capacity, activeUnits, lifetimeBalance } }`. `nextExpiryAt` is when the operator's active units next drop because an entry expires (or `null`). Supervisors may pass `operatorId` for an operator in their own pool. |
 | `GET /api/operators/:id/timeline?view=` | operators (own), supervisors (own pool) | `{ points: [{ at, balance, status }] }`. `view=transitions` = only where the status changes (the operator default); `view=full` = every balance change (the supervisor default, 403 for operators). |
-| `POST /api/switch-user` `{ userId }` | anyone | Temporary login, see above. |
+| `POST /api/switch-user` `{ userId }` | anyone | Temporary login, see above. 404 unless `ENABLE_USER_SWITCHER=true`. |
 
 How the writes stay correct under simultaneous requests: see `allocate()` in [`src/server/allocate.ts`](./src/server/allocate.ts) and `adjust()` in [`src/server/adjust.ts`](./src/server/adjust.ts). In short, one READ COMMITTED transaction locks the pool row, then checks the idempotency key (after the lock, so it sees the previous holder's commit, and before the capacity check, so a replay is never refused for lack of space), then checks capacity, then inserts and increments the balance. The unique index on `(created_by_id, idempotency_key)` is the backstop.
 

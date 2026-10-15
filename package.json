@@ -15,7 +15,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed.mjs",
     "db:seed:demo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed.mjs --demo",
-    "test:int": "vitest run --config vitest.int.config.ts"
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "ui:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ui-check.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",
