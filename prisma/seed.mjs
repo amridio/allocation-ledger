@@ -3,6 +3,10 @@
 //   npm run db:seed        reference data: tiers T1/T2/T3
 //   npm run db:seed:demo   reference data + demo operators and ~20 past entries
 //
+// Tier expiry is the same in both modes. DEFAULTS: TO CONFIRM WITH CLIENT.
+//   T1 24 hours, T2 72 hours, T3 never
+//   SEED_SHORT_EXPIRY=true: T1 = 2 minutes instead (so expiry can be watched while testing)
+//
 // Safe to run repeatedly:
 //   - tiers and operators are upserted by fixed id / name
 //   - ledger entries use fixed idempotency keys with ON CONFLICT DO NOTHING
@@ -10,11 +14,8 @@
 //   - the pool's cached balance is increased only by rows actually inserted, in the
 //     same transaction, under a row lock (same rules as the app)
 //
-// DEFAULTS: TO CONFIRM WITH CLIENT.
-//   reference tiers:  T1 24h, T2 72h, T3 never
-//   SEED_SHORT_EXPIRY=true: T1 = 2 minutes
-//   demo tiers:       T1 2 minutes, T2 24h, T3 never   (so expiry is visible while testing)
-//
+// Because expires_at is fixed when an entry is created, SEED_SHORT_EXPIRY only affects demo
+// entries inserted on that run. Entries seeded earlier keep the expiry they were created with.
 // Re-running a seed overwrites expiry for T1-T3, so never run it against production data.
 import pg from "pg";
 import { computeExpiresAt } from "../src/domain/expiry.ts";
@@ -35,17 +36,11 @@ if ((demo || shortExpiry) && process.env.NODE_ENV === "production") {
 const now = new Date(); // seed script, not domain code: this is where "now" is injected
 const minutesAgo = (m) => new Date(now.getTime() - m * 60_000);
 
-const tiers = demo
-  ? [
-      { id: "tier_t1", name: "T1", expiryMinutes: 2 },
-      { id: "tier_t2", name: "T2", expiryMinutes: 24 * 60 },
-      { id: "tier_t3", name: "T3", expiryMinutes: null },
-    ]
-  : [
-      { id: "tier_t1", name: "T1", expiryMinutes: shortExpiry ? 2 : 24 * 60 },
-      { id: "tier_t2", name: "T2", expiryMinutes: 72 * 60 },
-      { id: "tier_t3", name: "T3", expiryMinutes: null },
-    ];
+const tiers = [
+  { id: "tier_t1", name: "T1", expiryMinutes: shortExpiry ? 2 : 24 * 60 },
+  { id: "tier_t2", name: "T2", expiryMinutes: 72 * 60 },
+  { id: "tier_t3", name: "T3", expiryMinutes: null },
+];
 
 // ---- demo data -------------------------------------------------------------------------
 const people = [
@@ -57,24 +52,26 @@ const people = [
 ];
 
 // [key, operator, minutes ago it happened in the field, units]. Created by the operator.
-// With the demo tiers (T1 2 min, T2 24 h, T3 never) at seed time:
-//   ada/ben: everything older than 2 minutes is already expired; the newest is still active
-//   cho:     the first two (older than 24 h) are expired; the rest are active
+// Ages are chosen so some entries are already expired under the DEFAULT tiers
+// (T1 24 h = 1440 min, T2 72 h = 4320 min, T3 never):
+//   ada/ben: the entries older than 24 h are expired, the rest are active
+//   cho:     the two older than 72 h are expired, the rest are active
 //   dee:     never expires
+// With SEED_SHORT_EXPIRY=true (T1 = 2 min) all of ada's and ben's entries but the newest expire.
 const allocations = [
   ["demo-a01", "demo_ada", 4200, 30],
-  ["demo-a02", "demo_ada", 1500, 25],
-  ["demo-a03", "demo_ada", 300, 40],
+  ["demo-a02", "demo_ada", 2000, 25],
+  ["demo-a03", "demo_ada", 800, 40],
   ["demo-a04", "demo_ada", 90, 15],
-  ["demo-a05", "demo_ada", 1, 20], // expires about a minute after seeding
+  ["demo-a05", "demo_ada", 1, 20],
   ["demo-a06", "demo_ben", 2800, 50],
   ["demo-a07", "demo_ben", 600, 35],
   ["demo-a08", "demo_ben", 45, 25],
-  ["demo-a09", "demo_ben", 0.5, 30], // expires about 90 seconds after seeding
-  ["demo-a10", "demo_cho", 3000, 60],
-  ["demo-a11", "demo_cho", 1600, 45],
-  ["demo-a12", "demo_cho", 1200, 30],
-  ["demo-a13", "demo_cho", 400, 25],
+  ["demo-a09", "demo_ben", 0.5, 30],
+  ["demo-a10", "demo_cho", 6000, 60],
+  ["demo-a11", "demo_cho", 4800, 45],
+  ["demo-a12", "demo_cho", 3000, 30],
+  ["demo-a13", "demo_cho", 1200, 25],
   ["demo-a14", "demo_cho", 20, 40],
   ["demo-a15", "demo_dee", 4300, 55],
   ["demo-a16", "demo_dee", 1000, 20],
@@ -109,7 +106,7 @@ try {
     );
   }
   console.log(
-    `Tiers (${demo ? "demo" : shortExpiry ? "SHORT expiry" : "defaults"}):`,
+    `Tiers (${shortExpiry ? "SHORT expiry: T1 = 2 min" : "defaults"}):`,
     tiers.map((t) => `${t.name}=${t.expiryMinutes ?? "never"}`).join(", "),
   );
 
