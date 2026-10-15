@@ -12,35 +12,20 @@ enum Role {
   SUPERVISOR
 }
 
-enum StatusLevel {
-  CRITICAL
-  LOW
-  NORMAL
-  HIGH
-}
-
 enum EntryKind {
   ALLOCATION
   CORRECTION
 }
 
 // Operator tier. Controls how long an allocation lasts (null = never expires).
+// Lives in the database so it can change without a deploy.
 model Tier {
-  id          String     @id @default(cuid())
-  name        String     @unique
-  expiryHours Int?       @map("expiry_hours")
-  operators   Operator[]
+  id            String     @id @default(cuid())
+  name          String     @unique
+  expiryMinutes Int?       @map("expiry_minutes")
+  operators     Operator[]
 
   @@map("tier")
-}
-
-// Status = highest level whose minUnits <= operator's running total.
-// One row per level; the lowest level should have a very negative minUnits.
-model StatusThreshold {
-  level    StatusLevel @id
-  minUnits Int         @map("min_units")
-
-  @@map("status_threshold")
 }
 
 model Operator {

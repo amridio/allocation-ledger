@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Allocation Ledger
 
-## Getting Started
+Field operations module. Operators log resource allocations from their phones; allocations add to a shared unit pool; each operator's running total sets a status level. Project rules are in [`CLAUDE.md`](./CLAUDE.md).
 
-First, run the development server:
+Stack: Next.js (App Router), TypeScript, Prisma 7 + Postgres 16, TanStack Query, Tailwind, Zod, Vitest.
+
+## Local setup
 
 ```bash
+cp .env.example .env
+docker compose up -d --wait      # Postgres 16 (dev + test databases)
+npm install                      # also runs `prisma generate`
+npm run db:migrate               # apply migrations
+npm run db:seed                  # seed tiers
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Checks: `npm run typecheck`, `npm run lint`, `npm test`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Watching expiry locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+SEED_SHORT_EXPIRY=true npm run db:seed   # T1 expires after 2 minutes instead of 24 hours
+npm run db:seed                          # back to the defaults
+```
 
-## Learn More
+`SEED_SHORT_EXPIRY=true` is refused when `NODE_ENV=production`. Re-running the seed overwrites expiry for T1–T3, so don't run it against production data.
 
-To learn more about Next.js, take a look at the following resources:
+## Business defaults: TO CONFIRM WITH CLIENT
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The client has not given exact numbers yet. Everything below is a **placeholder default**.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+**Status cutoffs** (measured in active, i.e. non-expired, units). Defined in one place: [`src/domain/status-config.ts`](./src/domain/status-config.ts). If they change, update that file and the boundary tests in `src/domain/status.test.ts`.
 
-## Deploy on Vercel
+| Status   | Active units |
+| -------- | ------------ |
+| CRITICAL | below 20     |
+| LOW      | 20 to 49     |
+| NORMAL   | 50 to 99     |
+| HIGH     | 100 and above |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**Expiry per operator tier.** Stored on the `tier` table (`expiry_minutes`, null = never), so it can be changed without a deploy. Seeded by [`prisma/seed.mjs`](./prisma/seed.mjs).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Tier | Expiry          |
+| ---- | --------------- |
+| T1   | 24 hours        |
+| T2   | 72 hours        |
+| T3   | never (null)    |
+
+An entry's `expires_at` is calculated once, when it is created, from the operator's tier at that time. Changing a tier's expiry later does not alter existing entries.
