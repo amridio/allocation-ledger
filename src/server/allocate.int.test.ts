@@ -1,63 +1,20 @@
-import { randomUUID } from "node:crypto";
-import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { activeBalance, type DomainEntry } from "@/domain/ledger";
-import { allocate, getActiveUnits } from "./allocate";
-import { createDb } from "./db-client";
-
-try {
-  process.loadEnvFile();
-} catch {
-  // rely on the real environment
-}
-const TEST_URL = process.env["TEST_DATABASE_URL"];
-if (!TEST_URL) throw new Error("TEST_DATABASE_URL is not set");
-
-const db = createDb(TEST_URL, { max: 20 });
-const T0 = new Date("2026-03-01T09:00:00.000Z");
-const minutes = (base: Date, m: number) => new Date(base.getTime() + m * 60_000);
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** The ledger is append-only, so tests can't clean up: every test gets its own tier, pool and operator. */
-async function fixture(opts: { capacity?: number | null; expiryMinutes?: number | null } = {}) {
-  const id = randomUUID().slice(0, 8);
-  const tier = await db.tier.create({
-    data: { name: `tier-${id}`, expiryMinutes: opts.expiryMinutes === undefined ? 60 : opts.expiryMinutes },
-  });
-  const pool = await db.pool.create({ data: { name: `pool-${id}`, capacity: opts.capacity ?? null } });
-  const operator = await db.operator.create({ data: { name: `op-${id}`, tierId: tier.id, poolId: pool.id } });
-  return { poolId: pool.id, operatorId: operator.id };
-}
-
-const deps = (now: Date = T0, extra: { lockTimeoutMs?: number; txTimeoutMs?: number } = {}) => ({
+import { allocate } from "./allocate";
+import { getActiveUnits } from "./ledger-tx";
+import {
+  T0,
   db,
-  clock: () => now,
-  ...extra,
-});
+  deps,
+  fixture,
+  ledger,
+  minutes,
+  otherConnection,
+  sleep,
+  waitUntilSomeBackendWaitsOnALock,
+} from "./testing/int-helpers";
+
 const input = (operatorId: string, units: number, idempotencyKey: string) => ({ operatorId, units, idempotencyKey });
-
-async function ledger(poolId: string) {
-  const rows = await db.ledgerEntry.findMany({ where: { poolId }, orderBy: { seq: "asc" } });
-  const pool = await db.pool.findUniqueOrThrow({ where: { id: poolId } });
-  return { rows, count: rows.length, sum: rows.reduce((s, r) => s + r.units, 0), balance: pool.balance };
-}
-
-/** Opens a second connection holding a lock / uncommitted work, to create races on purpose. */
-async function otherConnection() {
-  const client = new pg.Client({ connectionString: TEST_URL });
-  await client.connect();
-  return client;
-}
-async function waitUntilSomeBackendWaitsOnALock() {
-  for (let i = 0; i < 100; i++) {
-    const { rows } = await db.$queryRaw<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM pg_stat_activity
-      WHERE datname = current_database() AND wait_event_type = 'Lock'`.then((r) => ({ rows: r }));
-    if ((rows[0]?.n ?? 0) > 0) return;
-    await sleep(50);
-  }
-  throw new Error("no backend ever started waiting on a lock");
-}
 
 beforeAll(async () => {
   await db.$queryRaw`SELECT 1`;

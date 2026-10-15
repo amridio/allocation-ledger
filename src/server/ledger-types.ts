@@ -1,5 +1,5 @@
 /** A ledger row as the service returns it (structural, so tests and handlers don't need Prisma). */
-export interface AllocationEntry {
+export interface LedgerEntryRecord {
   seq: number;
   kind: "ALLOCATION" | "ADJUSTMENT";
   operatorId: string;
@@ -24,5 +24,20 @@ export type AllocateFailure =
   | "BUSY";
 
 export type AllocateResult =
-  | { ok: true; replay: boolean; entry: AllocationEntry }
+  | { ok: true; replay: boolean; entry: LedgerEntryRecord }
   | { ok: false; reason: AllocateFailure };
+
+export type AdjustFailure =
+  | "IDEMPOTENCY_KEY_REUSED"
+  | "CAPACITY_EXCEEDED"
+  | "SUPERVISOR_NOT_FOUND"
+  /** The acting user exists but is not a supervisor. HTTP 403. */
+  | "NOT_SUPERVISOR"
+  | "TARGET_NOT_FOUND"
+  /** Only ALLOCATIONs can be adjusted (adjust the original instead of an adjustment). HTTP 422. */
+  | "TARGET_NOT_ALLOCATION"
+  | "BUSY";
+
+export type AdjustResult =
+  | { ok: true; replay: boolean; entry: LedgerEntryRecord }
+  | { ok: false; reason: AdjustFailure };

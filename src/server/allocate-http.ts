@@ -1,5 +1,5 @@
 import { allocateInputSchema, type AllocateInput } from "@/domain/allocation";
-import type { AllocateFailure, AllocateResult } from "./allocate-types";
+import type { AllocateFailure, AllocateResult } from "./ledger-types";
 
 const FAILURES: Record<AllocateFailure, { status: number; message: string }> = {
   IDEMPOTENCY_KEY_REUSED: { status: 409, message: "This idempotency key was already used with a different request." },

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleAllocate } from "./allocate-http";
-import type { AllocateResult, AllocationEntry } from "./allocate-types";
+import type { AllocateResult, LedgerEntryRecord } from "./ledger-types";
 
-const entry: AllocationEntry = {
+const entry: LedgerEntryRecord = {
   seq: 7,
   kind: "ALLOCATION",
   operatorId: "op_1",
