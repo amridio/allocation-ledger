@@ -64,9 +64,15 @@ The client has not given exact numbers yet. Everything below is a **placeholder 
 
 An entry's `expires_at` is calculated once, when it is created, from the operator's tier at that time (`src/domain/expiry.ts`). Changing a tier's expiry later does not alter existing entries.
 
-**Also to confirm with the client:**
-- Expiry is counted from `effective_at` (when it happened in the field), not from when the server recorded it.
-- A supervisor adjustment expires together with the entry it adjusts (the seed assumes this; the app rule is not written yet).
+## Assumptions
+
+Decided by us while building; the client has not seen these yet, so confirm them with the client.
+
+- **Expiry boundary.** An entry counts from `effective_at` up to, but not including, `expires_at`. At exactly `expires_at` it is already expired. Nothing is counted twice at the boundary: if one entry expires at the instant its replacement takes effect, only the replacement counts. (Implemented and explained in `src/domain/ledger.ts`; the same rule applies to the capacity check.)
+- **Expiry base time.** Expiry is counted from `effective_at` (when it happened in the field), not from when the server recorded it.
+- **Adjustments.** A supervisor adjustment is a signed ledger entry that takes effect at its own `effective_at` and expires together with the entry it adjusts (the seed assumes this; the app rule is not written yet). Backdating an adjustment changes the balance and status from that moment on, never before it.
+- **Capacity** is measured in active (non-expired) units, not the cached `balance`. What happens when an allocation would exceed it (reject or warn) is not decided.
+- **Two history views.** Supervisors see every balance change (`statusTimeline`). Operators see only the points where their status changes (`statusTransitions`), which are a subset of the supervisor points. The first point is always shown.
 
 ## Next steps
 

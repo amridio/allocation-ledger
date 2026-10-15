@@ -8,6 +8,8 @@
  * the server recorded it: a late sync from a phone shouldn't extend the allocation's life.
  * TO CONFIRM WITH CLIENT.
  *
+ * `expiresAt` itself is the first instant the entry no longer counts (see the boundary rule in ledger.ts).
+ *
  * 0 minutes is allowed and means "already expired when it takes effect" (never active).
  * A negative or non-finite value is a tier misconfiguration and throws, instead of
  * silently producing an expiry before the entry exists.

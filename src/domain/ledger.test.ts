@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeBalance, statusTimeline, type DomainEntry } from "./ledger";
+import { activeBalance, statusTimeline, statusTransitions, type DomainEntry } from "./ledger";
 import { deriveStatus } from "./status";
 
 /*
@@ -71,6 +71,20 @@ describe("activeBalance", () => {
     expect(activeBalance(entries, msBefore(at(60)))).toBe(40);
     expect(activeBalance(entries, at(60))).toBe(0);
     expect(activeBalance(entries, msAfter(at(60)))).toBe(0);
+  });
+
+  it("counts nothing twice at a hand-over: when one entry expires as its replacement takes effect, only the replacement counts", () => {
+    const entries = [alloc(1, 0, 40, 60), alloc(2, 60, 40, 120), alloc(3, 120, 40, null)];
+    // just before, at, and just after each hand-over, exactly one 40-unit entry is active
+    for (const handOver of [60, 120]) {
+      expect(activeBalance(entries, msBefore(at(handOver)))).toBe(40);
+      expect(activeBalance(entries, at(handOver))).toBe(40);
+      expect(activeBalance(entries, msAfter(at(handOver)))).toBe(40);
+    }
+    // and never 0 or 80 anywhere across the chain
+    for (const m of [0, 30, 59, 60, 61, 90, 119, 120, 121, 500]) {
+      expect(activeBalance(entries, at(m))).toBe(40);
+    }
   });
 
   it("ignores future entries", () => {
@@ -323,5 +337,122 @@ describe("statusTimeline", () => {
       expect(p.balance).not.toBe(previous); // a point exists only where the balance changes
       previous = p.balance;
     }
+  });
+});
+
+describe("statusTransitions", () => {
+  it("is empty for no entries", () => {
+    expect(statusTransitions([])).toEqual([]);
+  });
+
+  it("keeps the first point (the start of the history), even though nothing precedes it", () => {
+    expect(statusTransitions([alloc(1, 0, 15, null)])).toEqual([
+      { at: at(0), balance: 15, status: "CRITICAL" },
+    ]);
+  });
+
+  it("drops points where the balance changed but the status did not", () => {
+    const entries = [
+      alloc(1, 0, 22, null), //  22 LOW        <- first point, kept
+      alloc(2, 10, 10, null), // 32 LOW        <- same status, dropped
+      alloc(3, 20, 10, null), // 42 LOW        <- dropped
+      alloc(4, 30, 10, null), // 52 NORMAL     <- transition
+      alloc(5, 40, 10, null), // 62 NORMAL     <- dropped
+    ];
+    expect(statusTransitions(entries)).toEqual([
+      { at: at(0), balance: 22, status: "LOW" },
+      { at: at(30), balance: 52, status: "NORMAL" },
+    ]);
+    expect(statusTimeline(entries)).toHaveLength(5);
+  });
+
+  it("shows drops as well as rises, including expiry taking a status down", () => {
+    const entries = [alloc(1, 0, 120, 60), alloc(2, 30, 10, null)];
+    // 0: 120 HIGH, 30: 130 HIGH (dropped), 60: 10 CRITICAL
+    expect(statusTransitions(entries)).toEqual([
+      { at: at(0), balance: 120, status: "HIGH" },
+      { at: at(60), balance: 10, status: "CRITICAL" },
+    ]);
+  });
+
+  it("reports a status that goes away and comes back as two transitions", () => {
+    const entries = [alloc(1, 0, 60, null), adj(2, 10, -20, null, 1), alloc(3, 20, 30, null)];
+    expect(statusTransitions(entries).map((p) => p.status)).toEqual(["NORMAL", "LOW", "NORMAL"]);
+  });
+
+  it("every transition point also appears, unchanged, in the full timeline", () => {
+    const entries = [
+      alloc(1, 0, 15, 200),
+      alloc(2, 10, 10, null),
+      alloc(3, 20, 30, 90),
+      alloc(4, 30, 50, null),
+      adj(5, 40, -45, null, 4),
+      alloc(6, 45, 60, 45), // never active
+      alloc(7, 100, 8, null),
+      alloc(8, 5000, 70, null),
+    ];
+    const full = statusTimeline(entries);
+    const transitions = statusTransitions(entries);
+
+    expect(transitions.length).toBeGreaterThan(2);
+    expect(transitions.length).toBeLessThan(full.length); // it really does filter something
+    for (const point of transitions) expect(full).toContainEqual(point);
+
+    // and they are in the same order as in the full timeline
+    const fullTimes = full.map((p) => p.at.getTime());
+    const indices = transitions.map((p) => fullTimes.indexOf(p.at.getTime()));
+    expect(indices).toEqual([...indices].sort((a, b) => a - b));
+  });
+
+  it("loses no information: at any moment the status is the latest transition's status", () => {
+    const entries = [
+      alloc(1, 0, 15, 200),
+      alloc(2, 10, 10, null),
+      alloc(3, 20, 30, 90),
+      alloc(4, 30, 50, null),
+      adj(5, 40, -45, null, 4),
+      alloc(7, 100, 8, null),
+    ];
+    const transitions = statusTransitions(entries);
+    for (const p of statusTimeline(entries)) {
+      const latest = [...transitions].reverse().find((t) => t.at.getTime() <= p.at.getTime());
+      expect(latest?.status).toBe(p.status);
+    }
+  });
+
+  it("never has two consecutive points with the same status", () => {
+    const entries = [
+      alloc(1, 0, 22, null),
+      alloc(2, 5, 5, null),
+      alloc(3, 10, 40, 80),
+      alloc(4, 15, 60, null),
+      adj(5, 20, -90, null, 4),
+    ];
+    const statuses = statusTransitions(entries).map((p) => p.status);
+    statuses.slice(1).forEach((status, i) => expect(status).not.toBe(statuses[i]));
+  });
+
+  it("a backdated adjustment that flips a status shows up as a transition, earlier ones are unchanged", () => {
+    const A = alloc(1, 0, 30, null);
+    const B = alloc(2, 10, 25, null);
+    const C = alloc(3, 20, 20, null);
+    const before = statusTransitions([A, B, C]); // LOW, NORMAL (C stays NORMAL: dropped)
+    const after = statusTransitions([A, B, C, adj(4, 10, -10, null, 2)]); // LOW, LOW(dropped), NORMAL
+
+    expect(before.map((p) => p.status)).toEqual(["LOW", "NORMAL"]);
+    expect(after.map((p) => [p.at.getTime(), p.status])).toEqual([
+      [at(0).getTime(), "LOW"],
+      [at(20).getTime(), "NORMAL"],
+    ]);
+    expect(after[0]).toEqual(before[0]);
+  });
+
+  it("does not mutate its input", () => {
+    const entries = Object.freeze([
+      Object.freeze(alloc(2, 10, 40, null)),
+      Object.freeze(alloc(1, 0, 15, null)),
+    ]);
+    expect(() => statusTransitions(entries)).not.toThrow();
+    expect(entries.map((e) => e.seq)).toEqual([2, 1]);
   });
 });

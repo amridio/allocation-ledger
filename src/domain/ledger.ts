@@ -25,9 +25,19 @@ export interface StatusPoint {
 }
 
 /**
- * An entry counts during the half-open interval [effectiveAt, expiresAt):
- * it is active AT effectiveAt and already gone AT expiresAt.
+ * THE BOUNDARY RULE: an entry is active from `effectiveAt` UP TO, BUT NOT INCLUDING,
+ * `expiresAt` (the half-open interval [effectiveAt, expiresAt)).
+ *
+ *   - AT effectiveAt it already counts.
+ *   - AT expiresAt it is already gone ("expired at the exact time").
+ *
+ * Why half-open: when one entry expires at the same instant its replacement takes
+ * effect, exactly one of them counts at that instant. A closed interval would count
+ * both for that instant (double count); an interval open at both ends would count
+ * neither (a gap).
+ *
  * An entry with expiresAt <= effectiveAt is never active.
+ * Mirrored in SQL by the schema's `expires_at IS NULL OR expires_at > now` capacity check.
  */
 function isActiveAt(entry: DomainEntry, atMs: number): boolean {
   return (
@@ -78,4 +88,22 @@ export function statusTimeline(entries: readonly DomainEntry[]): StatusPoint[] {
     points.push({ at: new Date(ms), balance, status: deriveStatus(balance) });
   }
   return points;
+}
+
+/**
+ * The operator-facing view: only the points where the STATUS changes.
+ *
+ * Built from statusTimeline, so every point returned is one of its points, unchanged.
+ * The first point is always kept (it is the start of the history), and after that a point
+ * is kept only if its status differs from the previous point's. Consequently no two
+ * consecutive points share a status, and at any moment the status is that of the latest
+ * transition at or before it. Supervisors use statusTimeline for every balance change.
+ */
+export function statusTransitions(entries: readonly DomainEntry[]): StatusPoint[] {
+  const transitions: StatusPoint[] = [];
+  for (const point of statusTimeline(entries)) {
+    const previous = transitions[transitions.length - 1];
+    if (previous === undefined || previous.status !== point.status) transitions.push(point);
+  }
+  return transitions;
 }
