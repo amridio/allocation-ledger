@@ -20,6 +20,8 @@ Stack: Next.js (App Router), TypeScript, Prisma, Postgres (Docker), TanStack Que
 - Route handlers and server actions are **thin**: parse input with Zod, call domain and data-access code, return the result. No business rules in handlers or components.
 - The client reuses the same `src/domain/` functions for optimistic updates. The server response is always the source of truth and overrides the optimistic value.
 - Zod schemas are the single source of input types. Derive TypeScript types from them.
+- API handlers live in `src/server/api/`, are wrapped in `route()` (the one shared error handler), and signal failures by throwing `ApiError` / `failureError()`. Never build ad-hoc error responses, and never let a 500 carry a message or stack. Identity comes from `requireUser()` (the session cookie), never from the request body; `effectiveAt` / `expiresAt` are never accepted from clients. Every write `POST` requires the `Idempotency-Key` header.
+- Next.js here is a version with breaking changes: read `node_modules/next/dist/docs/` before writing Next-specific code, and never swallow its control-flow errors in a catch (`unstable_rethrow`).
 
 ## Testing
 

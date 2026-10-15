@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { idempotencyKeySchema } from "./idempotency";
 import { activeBalance } from "./ledger";
 
 /**
@@ -14,10 +15,16 @@ export const adjustInputSchema = z
     units: z.number().int().refine((n) => n !== 0, "units must not be 0"),
     /** Required: every adjustment must say why. */
     reason: z.string().trim().min(1).max(500),
-    idempotencyKey: z.string().min(1).max(200),
+    idempotencyKey: idempotencyKeySchema,
   })
   .strict();
 export type AdjustInput = z.infer<typeof adjustInputSchema>;
+
+/**
+ * The HTTP body of POST /api/adjustments. The supervisor is the logged-in user (cookie) and the
+ * idempotency key is the `Idempotency-Key` header, so neither may appear in the body.
+ */
+export const adjustBodySchema = adjustInputSchema.pick({ targetSeq: true, units: true, reason: true }).strict();
 
 /** The part of the target entry an adjustment copies from. */
 export interface AdjustmentTarget {

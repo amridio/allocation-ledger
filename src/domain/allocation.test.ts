@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateInputSchema, fitsCapacity, isSamePayload } from "./allocation";
+import { allocateBodySchema, allocateInputSchema, fitsCapacity, isSamePayload } from "./allocation";
 
 describe("allocateInputSchema", () => {
   const valid = { operatorId: "op_1", units: 25, idempotencyKey: "k-1" };
@@ -75,5 +75,23 @@ describe("fitsCapacity", () => {
 
   it("does not fit when the pool is already over capacity (e.g. the limit was lowered)", () => {
     expect(fitsCapacity({ capacity: 50, activeUnits: 80, units: 1 })).toBe(false);
+  });
+});
+
+describe("allocateBodySchema (HTTP body: the operator and the idempotency key come from the cookie and header)", () => {
+  it("accepts just units", () => {
+    expect(allocateBodySchema.parse({ units: 25 })).toEqual({ units: 25 });
+  });
+
+  it.each([
+    ["zero units", { units: 0 }],
+    ["negative units", { units: -1 }],
+    ["fractional units", { units: 1.5 }],
+    ["missing units", {}],
+    ["operatorId in the body (comes from the cookie)", { units: 5, operatorId: "op_2" }],
+    ["idempotencyKey in the body (comes from the header)", { units: 5, idempotencyKey: "k" }],
+    ["effectiveAt in the body", { units: 5, effectiveAt: "2020-01-01T00:00:00Z" }],
+  ])("rejects %s", (_name, input) => {
+    expect(allocateBodySchema.safeParse(input).success).toBe(false);
   });
 });

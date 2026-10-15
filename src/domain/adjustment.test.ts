@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addedActiveUnits, adjustInputSchema, buildAdjustment } from "./adjustment";
+import { addedActiveUnits, adjustBodySchema, adjustInputSchema, buildAdjustment } from "./adjustment";
 
 const T = (iso: string) => new Date(iso);
 
@@ -105,5 +105,24 @@ describe("addedActiveUnits: how many ACTIVE units an adjustment would add right 
 
   it("a negative adjustment never adds capacity usage", () => {
     expect(addedActiveUnits({ units: -8, effectiveAt: past, expiresAt: null }, now)).toBe(0);
+  });
+});
+
+describe("adjustBodySchema (HTTP body: the supervisor and the idempotency key come from the cookie and header)", () => {
+  const body = { targetSeq: 12, units: -5, reason: "Miscount" };
+
+  it("accepts targetSeq, units and reason", () => {
+    expect(adjustBodySchema.parse(body)).toEqual(body);
+  });
+
+  it.each([
+    ["missing reason", { ...body, reason: undefined }],
+    ["blank reason", { ...body, reason: "  " }],
+    ["zero units", { ...body, units: 0 }],
+    ["supervisorId in the body", { ...body, supervisorId: "sup_2" }],
+    ["idempotencyKey in the body", { ...body, idempotencyKey: "k" }],
+    ["effectiveAt in the body", { ...body, effectiveAt: "2020-01-01T00:00:00Z" }],
+  ])("rejects %s", (_name, input) => {
+    expect(adjustBodySchema.safeParse(input).success).toBe(false);
   });
 });

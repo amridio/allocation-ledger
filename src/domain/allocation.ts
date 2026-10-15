@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { idempotencyKeySchema } from "./idempotency";
 
 /**
  * Request to log an allocation. Strict on purpose: `effectiveAt` and `expiresAt` are set by
@@ -9,10 +10,16 @@ export const allocateInputSchema = z
     operatorId: z.string().min(1),
     units: z.number().int().positive(),
     /** Client-generated; unique per operator. Resend the same key to retry safely. */
-    idempotencyKey: z.string().min(1).max(200),
+    idempotencyKey: idempotencyKeySchema,
   })
   .strict();
 export type AllocateInput = z.infer<typeof allocateInputSchema>;
+
+/**
+ * The HTTP body of POST /api/entries. The operator is the logged-in user (cookie) and the
+ * idempotency key is the `Idempotency-Key` header, so neither may appear in the body.
+ */
+export const allocateBodySchema = allocateInputSchema.pick({ units: true }).strict();
 
 /** The fields that define "the same request" for an idempotent retry. */
 export interface IdempotencyPayload {

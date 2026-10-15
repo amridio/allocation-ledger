@@ -72,34 +72,51 @@ Decided by us while building; the client has not seen these yet, so confirm them
 
 - **Expiry boundary.** An entry counts from `effective_at` up to, but not including, `expires_at`. At exactly `expires_at` it is already expired. Nothing is counted twice at the boundary: if one entry expires at the instant its replacement takes effect, only the replacement counts. (Implemented and explained in `src/domain/ledger.ts`; the same rule applies to the capacity check.)
 - **Expiry base time.** Expiry is counted from `effective_at` (when it happened in the field), not from when the server recorded it.
-- **Adjustments.** A supervisor adjustment is a signed ledger entry that takes effect at its own `effective_at` and expires together with the entry it adjusts (the seed assumes this; the app rule is not written yet). Backdating an adjustment changes the balance and status from that moment on, never before it.
+- **Adjustments.** A supervisor adjustment is a signed ledger entry that takes effect at its own `effective_at` and expires together with the entry it adjusts (`adjust()` and the seed both implement this). The service copies the target's `effective_at` and `expires_at`, so every adjustment is backdated to the entry it corrects. Backdating an adjustment changes the balance and status from that moment on, never before it.
 - **Capacity** is measured in active (non-expired) units, not the cached `balance`. An allocation that would exceed it is **rejected** (422); the service assumes rejecting rather than warning, so confirm that with the client. Reaching capacity exactly is allowed.
 - **Timeouts.** A pool-lock timeout (3 s) and a whole-transaction timeout (5 s) both return `503` with `Retry-After: 1`; retrying with the same key is always safe.
 - **Two history views.** Supervisors see every balance change (`statusTimeline`). Operators see only the points where their status changes (`statusTransitions`), which are a subset of the supervisor points. The first point is always shown.
+- **Who may do what** (not specified by the client): only operators log allocations (for themselves); only supervisors adjust; a supervisor may adjust an entry in any pool and sees their own pool's entries by default. Only an allocation can be adjusted, not an adjustment (adjust the original again instead). The adjustment `reason` is required but is not part of the idempotency comparison.
+- **Capacity and adjustments.** Capacity is only checked for units an adjustment would add to the *active* total: a negative adjustment, or one on an already-expired entry, is always allowed, even in a pool that is over capacity.
+- **`/api/metric`** is our reading of "metric": the operator's active units and status plus their pool's capacity, active units and lifetime balance. Confirm that is what the client wants to see.
 
 ## API
 
-### `POST /api/allocations`
+All endpoints return JSON, are never cached (`Cache-Control: no-store`), and take their identity from the session cookie.
 
-Logs an allocation for an operator. The server sets `effectiveAt` (now) and `expiresAt` (from the operator's tier); a request that includes either is rejected.
+### Auth (temporary)
 
-```json
-{ "operatorId": "…", "units": 25, "idempotencyKey": "client-generated-unique-string" }
-```
+The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "userId": "…" }` sets it for any existing user (after `npm run db:seed:demo` try `demo_ada`, `demo_cho`, or the supervisor `demo_sup`). **Anyone can set that cookie to any id, so this identifies users but does not authenticate them.** Everything that needs "who is calling" goes through `requireUser()` in [`src/server/api/auth.ts`](./src/server/api/auth.ts), which is the one place to replace with real login.
 
-| Status | Meaning |
-| ------ | ------- |
-| `201` | Created. Body: `{ "replay": false, "entry": {…} }` |
-| `200` | The same `idempotencyKey` was already used with the same request: the original entry is returned (`"replay": true`) and nothing changes. Safe to resend after a timeout. |
-| `409` | `IDEMPOTENCY_KEY_REUSED`: that key was used with a different request. Compared: operator, kind, units, refSeq. |
-| `422` | `CAPACITY_EXCEEDED`: the pool's **active** units plus this allocation would exceed its capacity. |
-| `404` | `OPERATOR_NOT_FOUND` |
-| `400` | Invalid JSON or body. |
-| `503` | `BUSY` with `Retry-After: 1`: the pool lock (3 s) or the whole transaction (5 s) timed out. Nothing was written; **retry with the same `idempotencyKey`**. |
+### Conventions
 
-There is no authentication yet: `operatorId` is trusted as sent.
+- Every `POST` that writes needs an **`Idempotency-Key`** header (any unique string, up to 200 characters). Resend the same key to retry safely: you get the original entry back (`200`, `"replay": true`) and nothing is counted twice.
+- The operator / supervisor is the logged-in user, never a body field. `effectiveAt` and `expiresAt` are set by the server; a body that includes them is rejected.
+- One shared error handler produces every error response: `{ "error": CODE, "message": … }`.
 
-How it stays correct under simultaneous requests: see `allocate()` in [`src/server/allocate.ts`](./src/server/allocate.ts). In short, one READ COMMITTED transaction locks the pool row, then checks the idempotency key (after the lock, so it sees the previous holder's commit, and before the capacity check, so a replay is never refused for lack of space), then checks capacity, then inserts and increments the balance. The unique index on `(created_by_id, idempotency_key)` is the backstop.
+| Status | When |
+| ------ | ---- |
+| `400` | Invalid JSON / body / query (`INVALID_REQUEST` lists the fields), or a missing `Idempotency-Key` (`IDEMPOTENCY_KEY_REQUIRED`) |
+| `401` | `UNAUTHENTICATED`: no cookie, or it names a user that doesn't exist |
+| `403` | `FORBIDDEN` (wrong role, or an operator asking about someone else) / `NOT_SUPERVISOR` |
+| `404` | `NOT_FOUND`, `OPERATOR_NOT_FOUND`, `TARGET_NOT_FOUND` |
+| `409` | `IDEMPOTENCY_KEY_REUSED`: that key was used with a different request (compared: operator, kind, units, refSeq) |
+| `422` | `CAPACITY_EXCEEDED`, `TARGET_NOT_ALLOCATION` |
+| `503` | `BUSY` with `Retry-After: 1`: the pool lock (3 s) or the whole transaction (5 s) timed out. Nothing was written; **retry with the same key** |
+| `500` | `INTERNAL`: a fixed message only. The real error is logged on the server, never sent to the client |
+
+### Endpoints
+
+| Endpoint | Who | What |
+| -------- | --- | ---- |
+| `POST /api/entries` `{ units }` | operators | Log an allocation for yourself. `201` created, `200` replay. |
+| `POST /api/adjustments` `{ targetSeq, units, reason }` | supervisors | Adjust an earlier allocation (signed, non-zero units; `reason` required). The adjustment is dated at the target's `effectiveAt` and expires with it. `201` / `200`. |
+| `GET /api/entries?cursor=&limit=&operatorId=` | everyone | Newest first, paged by `seq`. Response `{ entries, nextCursor }`; pass `nextCursor` back as `cursor`; `null` = last page. `limit` is 1–100 (default 20). Operators see their own entries, supervisors their whole pool (or one operator with `operatorId`). |
+| `GET /api/metric?operatorId=` | everyone | `{ asOf, operator: { activeUnits, status }, pool: { capacity, activeUnits, lifetimeBalance } }`. Supervisors may pass `operatorId`. |
+| `GET /api/operators/:id/timeline?view=` | operators (own), supervisors (any) | `{ points: [{ at, balance, status }] }`. `view=transitions` = only where the status changes (the operator default); `view=full` = every balance change (the supervisor default, 403 for operators). |
+| `POST /api/switch-user` `{ userId }` | anyone | Temporary login, see above. |
+
+How the writes stay correct under simultaneous requests: see `allocate()` in [`src/server/allocate.ts`](./src/server/allocate.ts) and `adjust()` in [`src/server/adjust.ts`](./src/server/adjust.ts). In short, one READ COMMITTED transaction locks the pool row, then checks the idempotency key (after the lock, so it sees the previous holder's commit, and before the capacity check, so a replay is never refused for lack of space), then checks capacity, then inserts and increments the balance. The unique index on `(created_by_id, idempotency_key)` is the backstop.
 
 ## Next steps
 
