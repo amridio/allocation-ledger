@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createAdjustment } from "./api/adjustments";
 import { createEntry } from "./api/entries";
 import {
   T0,
@@ -7,6 +8,7 @@ import {
   ledger,
   otherConnection,
   sleep,
+  supervisorIn,
 } from "./testing/int-helpers";
 
 /*
@@ -18,6 +20,8 @@ import {
  *   2. 20 parallel allocations that would
  *      overflow a nearly full pool        -> balance never exceeds capacity (watched DURING the run)
  *   3. the same Idempotency-Key, 5 at once -> exactly one row
+ *   4. two supervisors adjust the same entry at the same moment, each delta fine on its own but
+ *      together below zero             -> exactly one succeeds, the entry never goes negative
  */
 
 const ROUNDS = [1, 2, 3, 4, 5];
@@ -138,5 +142,50 @@ describe("3. the same Idempotency-Key 5 times in parallel", () => {
 
     const l = await expectBalanceMatchesLedger(f.poolId);
     expect(l).toMatchObject({ count: 1, sum: 25, balance: 25 });
+  });
+});
+
+const adjustRequest = (supervisorId: string, targetSeq: number, units: number, key: string) =>
+  new Request("http://localhost/api/adjustments", {
+    method: "POST",
+    headers: { cookie: `uid=${supervisorId}`, "Idempotency-Key": key, "content-type": "application/json" },
+    body: JSON.stringify({ targetSeq, units, reason: "Concurrent correction" }),
+  });
+
+describe("4. two supervisors adjusting the same entry at the same moment", () => {
+  // a 30-unit entry. Each delta alone is fine (<= 30); together they total more than 30.
+  it.each([
+    [1, -20, -20],
+    [2, -16, -16],
+    [3, -25, -10],
+    [4, -30, -1],
+    [5, -15, -16],
+  ])("round %i: %i and %i together would go below zero, so only one succeeds", async (round, deltaA, deltaB) => {
+    const f = await fixture({ capacity: null, expiryMinutes: null });
+    const supA = await supervisorIn(f);
+    const supB = await supervisorIn(f);
+    const made = await createEntry(allocateRequest(f.operatorId, 30, `r${round}-entry`), ctx());
+    expect(made.status).toBe(201);
+    const target = (await made.json()).entry.seq as number;
+
+    // each alone is allowed: prove it, so the test can't pass for the wrong reason
+    expect(30 + deltaA).toBeGreaterThanOrEqual(0);
+    expect(30 + deltaB).toBeGreaterThanOrEqual(0);
+    expect(30 + deltaA + deltaB).toBeLessThan(0);
+
+    const [a, b] = await Promise.all([
+      createAdjustment(adjustRequest(supA, target, deltaA, `r${round}-a`), ctx()),
+      createAdjustment(adjustRequest(supB, target, deltaB, `r${round}-b`), ctx()),
+    ]);
+
+    expect([a.status, b.status].sort()).toEqual([201, 422]);
+    const loser = a.status === 422 ? a : b;
+    expect(await loser.json()).toMatchObject({ error: "ADJUSTMENT_BELOW_ZERO" });
+
+    const l = await expectBalanceMatchesLedger(f.poolId);
+    expect(l.count).toBe(2); // the entry + exactly one adjustment
+    const winnerDelta = a.status === 201 ? deltaA : deltaB;
+    expect(l.sum).toBe(30 + winnerDelta); // the entry's net units, never negative
+    expect(l.sum).toBeGreaterThanOrEqual(0);
   });
 });

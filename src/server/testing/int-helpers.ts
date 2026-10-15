@@ -2,16 +2,18 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createDb } from "../db-client";
+import { assertSafeTestDatabase } from "./test-db-guard";
 
 try {
   process.loadEnvFile();
 } catch {
   // rely on the real environment
 }
-export const TEST_URL = process.env["TEST_DATABASE_URL"];
-if (!TEST_URL) throw new Error("TEST_DATABASE_URL is not set");
+export const TEST_URL = process.env["TEST_DATABASE_URL"] ?? "";
+assertSafeTestDatabase(TEST_URL, process.env["DATABASE_URL"]); // never let a test touch dev data
 
-export const db = createDb(TEST_URL, { max: 20 });
+// 20 connections by default so 50 parallel requests can queue; TEST_DATABASE_POOL_SIZE lets you try smaller pools.
+export const db = createDb(TEST_URL, { max: Number(process.env["TEST_DATABASE_POOL_SIZE"] ?? 20) });
 export const T0 = new Date("2026-03-01T09:00:00.000Z");
 export const minutes = (base: Date, m: number) => new Date(base.getTime() + m * 60_000);
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

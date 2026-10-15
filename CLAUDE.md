@@ -29,7 +29,7 @@ Stack: Next.js (App Router), TypeScript, Prisma, Postgres (Docker), TanStack Que
 - Vitest. Every `src/domain/` function has unit tests, including edge cases at status thresholds and expiry boundaries.
 - Money-critical paths need a concurrency test against real Postgres: parallel writes, then assert the pool total equals the sum of ledger rows. Also test duplicate idempotency keys.
 - `src/server/concurrency.int.test.ts` is the guarantee test and must always pass: 50 parallel allocations (balance == ledger sum), 20 parallel overflow attempts on a nearly full pool (balance never above capacity, watched during the run), and 5 parallel requests with one Idempotency-Key (exactly one row). It drives the real HTTP handlers against real Postgres, 5 fresh-pool rounds per scenario. Run it repeatedly after touching `allocate`, `adjust` or `ledger-tx`.
-- Integration tests are named `*.int.test.ts` and run with `npm run test:int` against `TEST_DATABASE_URL`; `npm test` stays fast and database-free. The ledger can't be cleaned up, so every integration test creates its own pool, tier and operator with unique ids.
+- Integration tests are named `*.int.test.ts` and run with `npm run test:int` against `TEST_DATABASE_URL` (the `ops_test` database; a guard refuses any name not ending in `_test` or equal to `DATABASE_URL`, so tests can never write to dev data); `npm test` stays fast and database-free. The ledger can't be cleaned up, so every integration test creates its own pool, tier and operator with unique ids.
 
 ## UI
 

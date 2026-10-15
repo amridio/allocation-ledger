@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { assertSafeTestDatabase } from "./src/server/testing/test-db-guard";
 
 /** Migrates the TEST database (never the dev one) before the integration tests run. */
 export default function setup() {
@@ -8,12 +9,9 @@ export default function setup() {
     // No .env file: rely on the real environment.
   }
   const url = process.env["TEST_DATABASE_URL"];
-  if (!url) throw new Error("TEST_DATABASE_URL is not set");
-  if (url === process.env["DATABASE_URL"]) {
-    throw new Error("TEST_DATABASE_URL must differ from DATABASE_URL: integration tests insert rows that can never be deleted");
-  }
+  assertSafeTestDatabase(url, process.env["DATABASE_URL"]);
   execFileSync("npx", ["prisma", "migrate", "deploy"], {
-    env: { ...process.env, DATABASE_URL: url },
+    env: { ...process.env, DATABASE_URL: url as string },
     stdio: "inherit",
   });
 }

@@ -17,7 +17,11 @@ npm run dev
 
 Checks: `npm run typecheck`, `npm run lint`, `npm test` (fast unit tests, no database needed).
 
-Integration tests run against real Postgres (`TEST_DATABASE_URL`, migrated automatically): `npm run test:int`. The ledger is append-only, so these tests can't clean up after themselves. Each test creates its own pool, tier and operator, and the test database just grows. To reset it: `docker compose down -v && docker compose up -d --wait`.
+Integration tests run against real Postgres, in a separate database (`TEST_DATABASE_URL`, `ops_test` by default, created by the Docker init script and migrated automatically): `npm run test:int`. They never touch the dev database, and a guard refuses to run unless the database name ends in `_test` and differs from `DATABASE_URL`. The ledger is append-only, so these tests can't clean up after themselves. Each test creates its own pool, tier and operator, and `ops_test` just grows. To reset everything: `docker compose down -v && docker compose up -d --wait` (this also recreates the dev database; re-run `npm run db:deploy && npm run db:seed:demo`). `src/server/concurrency.int.test.ts` holds the money-critical guarantees (50 parallel allocations, overflow attempts on a full pool, repeated idempotency keys, two supervisors adjusting one entry); run it repeatedly after touching the write path.
+
+### Database connection pool
+
+`DATABASE_POOL_SIZE` (default `10`) is the maximum number of Postgres connections **one app instance** may hold. Size it so that *instances × pool size* stays well below Postgres's `max_connections` (default 100), leaving room for migrations and admin sessions. More connections do **not** make a single busy pool faster: writes to one pool run one at a time behind its row lock, and each waiting write holds a connection while it waits. If the pool is too small, requests queue for a connection and a write that waits more than 2 s gets `503 BUSY` (safe to retry); too large across many instances, and Postgres refuses connections. If the app runs as many short-lived instances (serverless), keep it small and put a connection pooler such as PgBouncer in front. A value that isn't a whole number >= 1 makes API requests fail with a 500 (the reason is in the server log). On a local database the whole concurrency suite, including 50 parallel writes, passes with a pool as small as 1, so start at the default and raise it only if you see `503 BUSY` while the database itself is idle.
 
 ### Seeding
 
