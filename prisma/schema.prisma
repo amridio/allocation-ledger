@@ -115,5 +115,7 @@ model LedgerEntry {
   @@index([poolId, seq])
   // "What adjusted this entry?"
   @@index([refSeq])
+  // Active-units sum for a pool (capacity check): WHERE pool_id = ? AND (expires_at IS NULL OR expires_at > now).
+  @@index([poolId, expiresAt])
   @@map("ledger_entry")
 }
