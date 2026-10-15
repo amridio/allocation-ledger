@@ -136,13 +136,31 @@ describe("adjust: who and what", () => {
     expect((await ledger(s.poolId)).count).toBe(2);
   });
 
-  it("a supervisor may adjust an entry in another pool: the pool that changes is the target's", async () => {
+  it("TARGET_OTHER_POOL when the target belongs to another pool: a supervisor can't change another site's numbers", async () => {
     const a = await setup(); // supervisor lives in pool A
     const b = await setup(); // target lives in pool B
-    const result = await adjust(deps(), adjustInput(a.sup, b.target.seq, -4, "x-pool"));
-    expect(result).toMatchObject({ ok: true });
-    expect(await ledger(b.poolId)).toMatchObject({ count: 2, sum: 26, balance: 26 });
+    expect(await adjust(deps(), adjustInput(a.sup, b.target.seq, -4, "x-pool"))).toEqual({
+      ok: false,
+      reason: "TARGET_OTHER_POOL",
+    });
+    expect(await adjust(deps(), adjustInput(b.sup, a.target.seq, 4, "x-pool-2"))).toEqual({
+      ok: false,
+      reason: "TARGET_OTHER_POOL",
+    });
+    // neither pool changed, in the ledger or the cached balance
     expect(await ledger(a.poolId)).toMatchObject({ count: 1, sum: 30, balance: 30 });
+    expect(await ledger(b.poolId)).toMatchObject({ count: 1, sum: 30, balance: 30 });
+  });
+
+  it("the pool check comes before everything else about the target, so an adjustment in another pool is 403, not 422", async () => {
+    const a = await setup();
+    const b = await setup();
+    const inB = await adjust(deps(), adjustInput(b.sup, b.target.seq, -1, "x-pool-3"));
+    if (!inB.ok) throw new Error("setup failed");
+    expect(await adjust(deps(), adjustInput(a.sup, inB.entry.seq, -1, "x-pool-4"))).toEqual({
+      ok: false,
+      reason: "TARGET_OTHER_POOL",
+    });
   });
 });
 
@@ -243,23 +261,88 @@ describe("adjust: idempotency", () => {
     }
   });
 
-  it("simultaneous same-key requests against targets in two pools: one wins, the other gets 409, balances stay consistent", async () => {
-    for (let round = 0; round < 5; round++) {
-      const a = await setup();
-      const b = await setup();
-      const [ra, rb] = await Promise.all([
-        adjust(deps(), adjustInput(a.sup, a.target.seq, -2, `k-two-pools-${round}`)),
-        adjust(deps(), adjustInput(a.sup, b.target.seq, -2, `k-two-pools-${round}`)),
-      ]);
-      const wins = [ra, rb].filter((r) => r.ok);
-      const losses = [ra, rb].filter((r) => !r.ok);
-      expect(wins).toHaveLength(1);
-      expect(losses).toEqual([{ ok: false, reason: "IDEMPOTENCY_KEY_REUSED" }]);
-      for (const pool of [a.poolId, b.poolId]) {
-        const l = await ledger(pool);
-        expect(l.balance).toBe(l.sum);
-      }
-      expect((await ledger(a.poolId)).count + (await ledger(b.poolId)).count).toBe(3); // 2 allocations + 1 adjustment
+  it("the same key can't be used to touch two pools: the second pool is refused before anything is written", async () => {
+    // Since a supervisor can only act in their own pool, one creator + key always lands in one pool,
+    // and the pool lock alone serializes them. The unique-index backstop above is for writers that
+    // bypass this service.
+    const a = await setup();
+    const b = await setup();
+    const ok = await adjust(deps(), adjustInput(a.sup, a.target.seq, -2, "k-two"));
+    const refused = await adjust(deps(), adjustInput(a.sup, b.target.seq, -2, "k-two"));
+    expect(ok).toMatchObject({ ok: true });
+    expect(refused).toEqual({ ok: false, reason: "TARGET_OTHER_POOL" });
+    expect(await ledger(b.poolId)).toMatchObject({ count: 1, balance: 30 });
+  });
+});
+
+describe("adjust: over-correction (an entry's net units can't go below zero)", () => {
+  it("allows reducing an entry to exactly zero, then refuses anything more", async () => {
+    const s = await setup({ units: 30 });
+    expect(await adjust(deps(), adjustInput(s.sup, s.target.seq, -20, "oc-1"))).toMatchObject({ ok: true }); // net 10
+    expect(await adjust(deps(), adjustInput(s.sup, s.target.seq, -10, "oc-2"))).toMatchObject({ ok: true }); // net 0
+    expect(await adjust(deps(), adjustInput(s.sup, s.target.seq, -1, "oc-3"))).toEqual({
+      ok: false,
+      reason: "ADJUSTMENT_BELOW_ZERO",
+    });
+    expect(await ledger(s.poolId)).toMatchObject({ count: 3, sum: 0, balance: 0 });
+  });
+
+  it("a single adjustment larger than the entry is refused and writes nothing", async () => {
+    const s = await setup({ units: 30 });
+    expect(await adjust(deps(), adjustInput(s.sup, s.target.seq, -31, "oc-4"))).toEqual({
+      ok: false,
+      reason: "ADJUSTMENT_BELOW_ZERO",
+    });
+    expect(await ledger(s.poolId)).toMatchObject({ count: 1, sum: 30, balance: 30 });
+  });
+
+  it("counts earlier positive adjustments, and adjustments on a different entry don't count", async () => {
+    const s = await setup({ units: 30 });
+    const other = await allocate(deps(), { operatorId: s.operatorId, units: 5, idempotencyKey: "other-entry" });
+    if (!other.ok) throw new Error("setup failed");
+    await adjust(deps(), adjustInput(s.sup, s.target.seq, 10, "oc-5")); // net 40
+    expect(await adjust(deps(), adjustInput(s.sup, s.target.seq, -40, "oc-6"))).toMatchObject({ ok: true });
+    // the other entry has its own total (5): -6 is too much for it even though the first is at 0
+    expect(await adjust(deps(), adjustInput(s.sup, other.entry.seq, -6, "oc-7"))).toEqual({
+      ok: false,
+      reason: "ADJUSTMENT_BELOW_ZERO",
+    });
+    expect(await adjust(deps(), adjustInput(s.sup, other.entry.seq, -5, "oc-8"))).toMatchObject({ ok: true });
+  });
+
+  it("applies to expired entries too (their history still has to make sense)", async () => {
+    const s = await setup({ units: 30, expiryMinutes: 60 });
+    expect(await adjust(deps(minutes(T0, 500)), adjustInput(s.sup, s.target.seq, -31, "oc-9"))).toEqual({
+      ok: false,
+      reason: "ADJUSTMENT_BELOW_ZERO",
+    });
+  });
+
+  it("a replay of an accepted adjustment still succeeds after later adjustments used up the entry", async () => {
+    const s = await setup({ units: 30 });
+    const first = await adjust(deps(), adjustInput(s.sup, s.target.seq, -20, "oc-10"));
+    await adjust(deps(), adjustInput(s.sup, s.target.seq, -10, "oc-11")); // net 0
+    const replay = await adjust(deps(), adjustInput(s.sup, s.target.seq, -20, "oc-10"));
+    expect(replay).toMatchObject({ ok: true, replay: true });
+    if (!first.ok || !replay.ok) throw new Error("unreachable");
+    expect(replay.entry.seq).toBe(first.entry.seq);
+  });
+
+  it("two supervisors adjusting the same entry at once can't both pass: the check runs inside the pool lock", async () => {
+    for (let round = 0; round < 8; round++) {
+      const s = await setup({ units: 30 });
+      const second = await supervisorIn(s);
+      // six simultaneous -10s from two supervisors against a 30-unit entry: exactly three can fit
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_, i) =>
+          adjust(deps(), adjustInput(i % 2 === 0 ? s.sup : second, s.target.seq, -10, `oc-race-${round}-${i}`)),
+        ),
+      );
+      expect(results.filter((r) => r.ok)).toHaveLength(3);
+      expect(results.filter((r) => !r.ok && r.reason === "ADJUSTMENT_BELOW_ZERO")).toHaveLength(3);
+      const l = await ledger(s.poolId);
+      expect(l.sum).toBe(0); // the entry ends at exactly zero, never negative
+      expect(l.balance).toBe(0);
     }
   });
 });
@@ -317,21 +400,20 @@ describe("adjust: capacity applies only to units that would be ACTIVE now", () =
   });
 });
 
-describe("adjust: serializes with allocations on the TARGET's pool", () => {
-  it("a supervisor living elsewhere and an operator filling the same pool can't both squeeze past capacity", async () => {
+describe("adjust: serializes with allocations on the same pool", () => {
+  it("an operator's allocation and a supervisor's adjustment in the same pool can't both squeeze past capacity", async () => {
     for (let round = 0; round < 6; round++) {
-      const target = await setup({ capacity: 50, units: 40 }); // pool B: 40 of 50 used
-      const elsewhere = await setup(); // the supervisor lives in a different pool (A)
+      const s = await setup({ capacity: 50, units: 40 }); // 40 of 50 used
 
       // +10 from the operator and +10 from the supervisor: only one of them can fit
       const [allocation, adjustment] = await Promise.all([
-        allocate(deps(), { operatorId: target.operatorId, units: 10, idempotencyKey: `race-a-${round}` }),
-        adjust(deps(), adjustInput(elsewhere.sup, target.target.seq, 10, `race-j-${round}`)),
+        allocate(deps(), { operatorId: s.operatorId, units: 10, idempotencyKey: `race-a-${round}` }),
+        adjust(deps(), adjustInput(s.sup, s.target.seq, 10, `race-j-${round}`)),
       ]);
 
       expect([allocation, adjustment].filter((r) => r.ok)).toHaveLength(1);
       expect([allocation, adjustment].filter((r) => !r.ok && r.reason === "CAPACITY_EXCEEDED")).toHaveLength(1);
-      const l = await ledger(target.poolId);
+      const l = await ledger(s.poolId);
       expect(l.sum).toBe(50);
       expect(l.balance).toBe(50);
     }

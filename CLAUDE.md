@@ -8,6 +8,7 @@ Stack: Next.js (App Router), TypeScript, Prisma, Postgres (Docker), TanStack Que
 
 - The ledger table is **append-only**. Never `UPDATE` or `DELETE` ledger rows, in code or in migrations.
 - Supervisor corrections are **new `ADJUSTMENT` rows** whose `refSeq` points at the entry they adjust (a `reason` is required). Rows are ordered by `seq`; `effectiveAt` is when it happened, `recordedAt` is when the server saw it.
+- A supervisor adjusts **only entries in their own pool** (403 otherwise), and an entry's **net units (original + all its adjustments + the new one) never go below zero** (422). The net-units check reads the earlier adjustments after taking the pool lock, so concurrent adjustments to one entry serialize.
 - Every write carries a client-generated **idempotency key**, unique per creator (`createdById`, `idempotencyKey`). A retry with the same key returns the original result and must not double count.
 - Inserting a ledger row and updating the pool's cached `balance` happen in **one transaction**. Lock the pool row with `SELECT ... FOR UPDATE` before inserting (this also keeps `seq` in commit order within a pool). Update the balance with `balance = balance + n`. Never read a total, compute in app code, and write it back.
 - **Expiry date is calculated once, when the entry is created**, from the operator's tier at that time, and stored on the row. Do not recompute it later.

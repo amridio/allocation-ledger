@@ -36,6 +36,10 @@ export type AdjustFailure =
   | "TARGET_NOT_FOUND"
   /** Only ALLOCATIONs can be adjusted (adjust the original instead of an adjustment). HTTP 422. */
   | "TARGET_NOT_ALLOCATION"
+  /** The target belongs to another pool (site). A supervisor may only adjust their own pool. HTTP 403. */
+  | "TARGET_OTHER_POOL"
+  /** The entry's net units (original + all adjustments + this one) would go below zero. HTTP 422. */
+  | "ADJUSTMENT_BELOW_ZERO"
   | "BUSY";
 
 export type AdjustResult =

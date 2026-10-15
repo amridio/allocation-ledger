@@ -289,6 +289,37 @@ describe("POST /api/adjustments", () => {
   });
 });
 
+describe("POST /api/adjustments: pool boundary and over-correction", () => {
+  it("403 TARGET_OTHER_POOL when a supervisor adjusts an entry in another pool; nothing changes", async () => {
+    const mine = await world();
+    const theirs = await world();
+    const target = await give(theirs.op1, 30, "xp-1");
+    const res = await createAdjustment(
+      request("/api/adjustments", { as: mine.sup, key: "xp-a", body: { targetSeq: target.seq, units: -5, reason: "r" } }),
+      ctx(),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "TARGET_OTHER_POOL" });
+    expect(await ledger(theirs.poolId)).toMatchObject({ count: 1, balance: 30 });
+  });
+
+  it("422 ADJUSTMENT_BELOW_ZERO when the entry's net units would go negative", async () => {
+    const w = await world();
+    const target = await give(w.op1, 30, "bz-1");
+    const res = await createAdjustment(
+      request("/api/adjustments", { as: w.sup, key: "bz-a", body: { targetSeq: target.seq, units: -31, reason: "r" } }),
+      ctx(),
+    );
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: "ADJUSTMENT_BELOW_ZERO" });
+    const ok = await createAdjustment(
+      request("/api/adjustments", { as: w.sup, key: "bz-b", body: { targetSeq: target.seq, units: -30, reason: "r" } }),
+      ctx(),
+    );
+    expect(ok.status).toBe(201);
+  });
+});
+
 describe("GET /api/entries (cursor pagination by seq)", () => {
   /** op1 gets 7 allocations; returns their seqs oldest -> newest. */
   async function sevenEntries(w: Awaited<ReturnType<typeof world>>) {

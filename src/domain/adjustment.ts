@@ -81,3 +81,22 @@ export function addedActiveUnits(
   const asEntry = { seq: 0, kind: "ADJUSTMENT", refSeq: null, ...adjustment } as const;
   return Math.max(0, activeBalance([asEntry], now));
 }
+
+/**
+ * An entry's net units after one more adjustment: the original units, plus every earlier
+ * adjustment to it, plus the new delta. Expiry is irrelevant here: this is about the entry's
+ * own history making sense, not about what is active right now.
+ */
+export function netUnitsAfterAdjustment(params: {
+  targetUnits: number;
+  /** Sum of the units of all adjustments already made to this entry (0 if none). */
+  priorAdjustmentsTotal: number;
+  delta: number;
+}): number {
+  return params.targetUnits + params.priorAdjustmentsTotal + params.delta;
+}
+
+/** An adjustment may bring an entry down to exactly zero, but not below. */
+export function wouldOverCorrect(params: Parameters<typeof netUnitsAfterAdjustment>[0]): boolean {
+  return netUnitsAfterAdjustment(params) < 0;
+}

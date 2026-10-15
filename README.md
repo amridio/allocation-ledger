@@ -76,7 +76,9 @@ Decided by us while building; the client has not seen these yet, so confirm them
 - **Capacity** is measured in active (non-expired) units, not the cached `balance`. An allocation that would exceed it is **rejected** (422); the service assumes rejecting rather than warning, so confirm that with the client. Reaching capacity exactly is allowed.
 - **Timeouts.** A pool-lock timeout (3 s) and a whole-transaction timeout (5 s) both return `503` with `Retry-After: 1`; retrying with the same key is always safe.
 - **Two history views.** Supervisors see every balance change (`statusTimeline`). Operators see only the points where their status changes (`statusTransitions`), which are a subset of the supervisor points. The first point is always shown.
-- **Who may do what** (not specified by the client): only operators log allocations (for themselves); only supervisors adjust; a supervisor may adjust an entry in any pool and sees their own pool's entries by default. Only an allocation can be adjusted, not an adjustment (adjust the original again instead). The adjustment `reason` is required but is not part of the idempotency comparison.
+- **Who may do what** (not specified by the client): only operators log allocations (for themselves); only supervisors adjust. Only an allocation can be adjusted, not an adjustment (adjust the original again instead). The adjustment `reason` is required but is not part of the idempotency comparison.
+- **A supervisor can only adjust entries in their own pool** (their site). Adjusting another pool's entry is `403 TARGET_OTHER_POOL`. **Reading is not restricted the same way yet:** `GET /api/entries`, `/api/metric` and `/api/operators/:id/timeline` let a supervisor name an operator in another pool. Decide whether reads should be limited to the supervisor's pool too.
+- **Over-correction.** An entry's net units (the original plus all its adjustments plus the new one) can't go below zero; exactly zero is allowed. Otherwise `422 ADJUSTMENT_BELOW_ZERO`. This counts every adjustment ever made to the entry (expired or not) and is checked inside the pool lock, so two supervisors adjusting the same entry at once can't both get through.
 - **Capacity and adjustments.** Capacity is only checked for units an adjustment would add to the *active* total: a negative adjustment, or one on an already-expired entry, is always allowed, even in a pool that is over capacity.
 - **`/api/metric`** is our reading of "metric": the operator's active units and status plus their pool's capacity, active units and lifetime balance. Confirm that is what the client wants to see.
 
@@ -98,10 +100,10 @@ The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "u
 | ------ | ---- |
 | `400` | Invalid JSON / body / query (`INVALID_REQUEST` lists the fields), or a missing `Idempotency-Key` (`IDEMPOTENCY_KEY_REQUIRED`) |
 | `401` | `UNAUTHENTICATED`: no cookie, or it names a user that doesn't exist |
-| `403` | `FORBIDDEN` (wrong role, or an operator asking about someone else) / `NOT_SUPERVISOR` |
+| `403` | `FORBIDDEN` (wrong role, or an operator asking about someone else) / `NOT_SUPERVISOR` / `TARGET_OTHER_POOL` (a supervisor adjusting an entry outside their own pool) |
 | `404` | `NOT_FOUND`, `OPERATOR_NOT_FOUND`, `TARGET_NOT_FOUND` |
 | `409` | `IDEMPOTENCY_KEY_REUSED`: that key was used with a different request (compared: operator, kind, units, refSeq) |
-| `422` | `CAPACITY_EXCEEDED`, `TARGET_NOT_ALLOCATION` |
+| `422` | `CAPACITY_EXCEEDED`, `TARGET_NOT_ALLOCATION`, `ADJUSTMENT_BELOW_ZERO` (the entry's net units would go below zero) |
 | `503` | `BUSY` with `Retry-After: 1`: the pool lock (3 s) or the whole transaction (5 s) timed out. Nothing was written; **retry with the same key** |
 | `500` | `INTERNAL`: a fixed message only. The real error is logged on the server, never sent to the client |
 
@@ -110,7 +112,7 @@ The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "u
 | Endpoint | Who | What |
 | -------- | --- | ---- |
 | `POST /api/entries` `{ units }` | operators | Log an allocation for yourself. `201` created, `200` replay. |
-| `POST /api/adjustments` `{ targetSeq, units, reason }` | supervisors | Adjust an earlier allocation (signed, non-zero units; `reason` required). The adjustment is dated at the target's `effectiveAt` and expires with it. `201` / `200`. |
+| `POST /api/adjustments` `{ targetSeq, units, reason }` | supervisors | Adjust an earlier allocation in your own pool (signed, non-zero units; `reason` required; the entry can't drop below zero in total). The adjustment is dated at the target's `effectiveAt` and expires with it. `201` / `200`. |
 | `GET /api/entries?cursor=&limit=&operatorId=` | everyone | Newest first, paged by `seq`. Response `{ entries, nextCursor }`; pass `nextCursor` back as `cursor`; `null` = last page. `limit` is 1–100 (default 20). Operators see their own entries, supervisors their whole pool (or one operator with `operatorId`). |
 | `GET /api/metric?operatorId=` | everyone | `{ asOf, operator: { activeUnits, status }, pool: { capacity, activeUnits, lifetimeBalance } }`. Supervisors may pass `operatorId`. |
 | `GET /api/operators/:id/timeline?view=` | operators (own), supervisors (any) | `{ points: [{ at, balance, status }] }`. `view=transitions` = only where the status changes (the operator default); `view=full` = every balance change (the supervisor default, 403 for operators). |

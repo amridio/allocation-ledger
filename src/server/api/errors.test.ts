@@ -14,6 +14,8 @@ describe("failureError: every service failure maps to exactly one HTTP error", (
     ["SUPERVISOR_NOT_FOUND", 404],
     ["TARGET_NOT_FOUND", 404],
     ["NOT_SUPERVISOR", 403],
+    ["TARGET_OTHER_POOL", 403],
+    ["ADJUSTMENT_BELOW_ZERO", 422],
     ["BUSY", 503],
   ] as const)("%s -> %i with a matching error code", async (reason, status) => {
     const res = toErrorResponse(failureError(reason));

@@ -30,6 +30,11 @@ const FAILURES: Record<Failure, { status: number; message: string; headers?: Rec
   SUPERVISOR_NOT_FOUND: { status: 404, message: "Supervisor not found." },
   TARGET_NOT_FOUND: { status: 404, message: "Entry not found." },
   NOT_SUPERVISOR: { status: 403, message: "Only supervisors can do that." },
+  TARGET_OTHER_POOL: { status: 403, message: "You can only adjust entries in your own pool." },
+  ADJUSTMENT_BELOW_ZERO: {
+    status: 422,
+    message: "That would take the entry below zero units once all its adjustments are counted.",
+  },
   BUSY: {
     status: 503,
     message: "The pool is busy. Retry with the same Idempotency-Key.",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addedActiveUnits, adjustBodySchema, adjustInputSchema, buildAdjustment } from "./adjustment";
+import { addedActiveUnits, adjustBodySchema, adjustInputSchema, buildAdjustment, netUnitsAfterAdjustment, wouldOverCorrect } from "./adjustment";
 
 const T = (iso: string) => new Date(iso);
 
@@ -124,5 +124,33 @@ describe("adjustBodySchema (HTTP body: the supervisor and the idempotency key co
     ["effectiveAt in the body", { ...body, effectiveAt: "2020-01-01T00:00:00Z" }],
   ])("rejects %s", (_name, input) => {
     expect(adjustBodySchema.safeParse(input).success).toBe(false);
+  });
+});
+
+describe("over-correction: an entry's net units (original + all its adjustments + the new delta) can't go below zero", () => {
+  it("netUnitsAfterAdjustment adds the original, the earlier adjustments and the new delta", () => {
+    expect(netUnitsAfterAdjustment({ targetUnits: 30, priorAdjustmentsTotal: 0, delta: -10 })).toBe(20);
+    expect(netUnitsAfterAdjustment({ targetUnits: 30, priorAdjustmentsTotal: -10, delta: -5 })).toBe(15);
+    expect(netUnitsAfterAdjustment({ targetUnits: 30, priorAdjustmentsTotal: 12, delta: 3 })).toBe(45);
+  });
+
+  it("reducing an entry exactly to zero is allowed; one unit further is not", () => {
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: 0, delta: -30 })).toBe(false);
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: 0, delta: -31 })).toBe(true);
+  });
+
+  it("counts the adjustments already made", () => {
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: -10, delta: -20 })).toBe(false); // 0
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: -10, delta: -21 })).toBe(true); // -1
+  });
+
+  it("earlier positive adjustments make more room", () => {
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: 10, delta: -40 })).toBe(false);
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: 10, delta: -41 })).toBe(true);
+  });
+
+  it("a positive adjustment can never be an over-correction", () => {
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: 0, delta: 1 })).toBe(false);
+    expect(wouldOverCorrect({ targetUnits: 30, priorAdjustmentsTotal: -30, delta: 5 })).toBe(false);
   });
 });
