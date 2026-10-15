@@ -393,7 +393,7 @@ describe("GET /api/entries (cursor pagination by seq)", () => {
     expect(other.status).toBe(403);
   });
 
-  it("a supervisor sees their whole pool (never another pool), and can filter to one operator", async () => {
+  it("a supervisor sees their whole pool (never another pool), and can filter to one operator in it", async () => {
     const w = await world();
     await give(w.op1, 5, "s-1");
     await give(w.op2, 6, "s-2");
@@ -405,7 +405,7 @@ describe("GET /api/entries (cursor pagination by seq)", () => {
     const one = await (await page(w.sup, `?operatorId=${w.op2}`)).json();
     expect(one.entries.map((e: { operatorId: string }) => e.operatorId)).toEqual([w.op2]);
 
-    expect((await page(w.sup, "?operatorId=ghost")).status).toBe(404);
+    expect((await page(w.sup, "?operatorId=ghost")).status).toBe(403);
   });
 
   it("400 for bad paging parameters", async () => {
@@ -442,14 +442,14 @@ describe("GET /api/metric", () => {
     expect(body.operator).toMatchObject({ activeUnits: 0, status: "CRITICAL" });
   });
 
-  it("a supervisor can look at any operator; an operator can't look at someone else; unknown is 404", async () => {
+  it("a supervisor can look at operators in their pool; an operator can't look at someone else; unknown is 403", async () => {
     const w = await world();
     await give(w.op1, 120, "m-3");
     const asSup = await (await getMetric(request(`/api/metric?operatorId=${w.op1}`, { as: w.sup }), ctx())).json();
     expect(asSup.operator).toMatchObject({ id: w.op1, activeUnits: 120, status: "HIGH" });
 
     expect((await getMetric(request(`/api/metric?operatorId=${w.op1}`, { as: w.op2 }), ctx())).status).toBe(403);
-    expect((await getMetric(request("/api/metric?operatorId=ghost", { as: w.sup }), ctx())).status).toBe(404);
+    expect((await getMetric(request("/api/metric?operatorId=ghost", { as: w.sup }), ctx())).status).toBe(403);
     expect((await getMetric(request("/api/metric?x=1", { as: w.op1 }), ctx())).status).toBe(400);
   });
 });
@@ -519,9 +519,9 @@ describe("GET /api/operators/:id/timeline", () => {
     expect(ghost.status).toBe(403);
   });
 
-  it("a supervisor gets 404 for an unknown operator and 400 for a bad view", async () => {
+  it("a supervisor gets 403 for an unknown operator (same as another pool) and 400 for a bad view", async () => {
     const w = await story();
-    expect((await getTimeline(request("/api/operators/ghost/timeline", { as: w.sup }), ctx(), "ghost")).status).toBe(404);
+    expect((await getTimeline(request("/api/operators/ghost/timeline", { as: w.sup }), ctx(), "ghost")).status).toBe(403);
     expect((await get(w, w.sup, "?view=all")).status).toBe(400);
   });
 
@@ -529,6 +529,109 @@ describe("GET /api/operators/:id/timeline", () => {
     const w = await world();
     const res = await getTimeline(request(`/api/operators/${w.op2}/timeline`, { as: w.op2 }), ctx(), w.op2);
     expect((await res.json()).points).toEqual([]);
+  });
+});
+
+/*
+ * One read rule for every operator-scoped endpoint (src/server/api/access.ts):
+ *   operator   -> only themselves
+ *   supervisor -> operators in their OWN pool
+ *   anything else, including an id that doesn't exist -> 403
+ * The same table is run against each endpoint, so adding an endpoint means adding a row here.
+ */
+const READ_ENDPOINTS = [
+  {
+    name: "GET /api/entries?operatorId=",
+    call: (as: string, target: string) => listEntries(request(`/api/entries?operatorId=${target}`, { as }), ctx()),
+  },
+  {
+    name: "GET /api/metric?operatorId=",
+    call: (as: string, target: string) => getMetric(request(`/api/metric?operatorId=${target}`, { as }), ctx()),
+  },
+  {
+    name: "GET /api/operators/:id/timeline",
+    call: (as: string, target: string) =>
+      getTimeline(request(`/api/operators/${target}/timeline`, { as }), ctx(), target),
+  },
+];
+
+describe.each(READ_ENDPOINTS)("read access: $name", ({ call }) => {
+  async function site() {
+    const w = await world();
+    await give(w.op1, 25, `acc-1-${w.op1}`);
+    await give(w.op2, 35, `acc-2-${w.op2}`);
+    await give(w.otherOp, 777, `acc-far-${w.otherOp}`); // the other site's numbers: must never show up
+    return w;
+  }
+
+  it("a supervisor can read an operator in their own pool", async () => {
+    const w = await site();
+    expect((await call(w.sup, w.op1)).status).toBe(200);
+    expect((await call(w.sup, w.op2)).status).toBe(200);
+  });
+
+  it("an operator can read themselves", async () => {
+    const w = await site();
+    expect((await call(w.op1, w.op1)).status).toBe(200);
+  });
+
+  it("a supervisor can NOT read an operator in another pool: 403, and none of their data is in the response", async () => {
+    const w = await site();
+    const res = await call(w.sup, w.otherOp);
+    expect(res.status).toBe(403);
+    const text = await res.text();
+    expect(JSON.parse(text)).toMatchObject({ error: "FORBIDDEN" });
+    expect(text).not.toContain("777");
+    expect(text).not.toContain(w.otherOp);
+  });
+
+  it("a supervisor asking about an id that doesn't exist gets the same 403, so existence can't be probed", async () => {
+    const w = await site();
+    const unknown = await call(w.sup, "no-such-operator");
+    const farAway = await call(w.sup, w.otherOp);
+    expect(unknown.status).toBe(403);
+    expect(await unknown.json()).toEqual(await farAway.json());
+  });
+
+  it("an operator can NOT read a colleague in the same pool: 403", async () => {
+    const w = await site();
+    expect((await call(w.op1, w.op2)).status).toBe(403);
+  });
+
+  it("an operator can NOT read an operator in another pool: 403", async () => {
+    const w = await site();
+    const res = await call(w.op1, w.otherOp);
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain("777");
+  });
+
+  it("an operator asking about an unknown id gets 403 too", async () => {
+    const w = await site();
+    expect((await call(w.op1, "no-such-operator")).status).toBe(403);
+  });
+});
+
+describe("read access: the unfiltered views never cross pools either", () => {
+  it("GET /api/entries without a filter: a supervisor sees only their own pool's entries, an operator only their own", async () => {
+    const w = await world();
+    await give(w.op1, 5, "uf-1");
+    await give(w.op2, 6, "uf-2");
+    await give(w.otherOp, 777, "uf-far");
+
+    const asSup = await (await listEntries(request("/api/entries", { as: w.sup }), ctx())).json();
+    expect(asSup.entries.map((e: { units: number }) => e.units).sort()).toEqual([5, 6]);
+
+    const asOp = await (await listEntries(request("/api/entries", { as: w.op1 }), ctx())).json();
+    expect(asOp.entries.map((e: { units: number }) => e.units)).toEqual([5]);
+  });
+
+  it("GET /api/metric without a parameter describes the caller and their own pool only", async () => {
+    const w = await world();
+    await give(w.op1, 5, "um-1");
+    await give(w.otherOp, 777, "um-far");
+    const body = await (await getMetric(request("/api/metric", { as: w.sup }), ctx())).json();
+    expect(body.pool.id).toBe(w.poolId);
+    expect(JSON.stringify(body)).not.toContain("777");
   });
 });
 

@@ -2,9 +2,10 @@ import { allocateBodySchema } from "@/domain/allocation";
 import { entriesQuerySchema } from "@/domain/queries";
 import type { Prisma } from "@/generated/prisma/client";
 import { allocate } from "../allocate";
+import { requireAccessibleOperator } from "./access";
 import { requireRole, requireUser } from "./auth";
 import type { ApiContext } from "./context";
-import { failureError, forbidden, jsonResponse, notFound, route } from "./errors";
+import { failureError, jsonResponse, route } from "./errors";
 import { readIdempotencyKey, readJsonBody, readQuery } from "./request";
 
 /** POST /api/entries: the logged-in operator logs an allocation for themselves. */
@@ -21,25 +22,21 @@ export const createEntry = route(async (request: Request, ctx: ApiContext) => {
 
 /**
  * GET /api/entries?cursor=&limit=&operatorId=
- * Newest first, paged by seq. An operator sees their own entries; a supervisor sees their whole
- * pool, or one operator's with ?operatorId=.
+ * Newest first, paged by seq. An operator sees their own entries; a supervisor sees their own pool,
+ * or one operator's in it with ?operatorId=. Anything outside that is 403 (see access.ts).
  */
 export const listEntries = route(async (request: Request, ctx: ApiContext) => {
   const user = await requireUser(request, ctx.db);
   const query = readQuery(request, entriesQuerySchema);
 
+  // With ?operatorId= the subject must pass the shared read rule. Without it: an operator sees their
+  // own entries, a supervisor their whole pool (every entry in a pool belongs to an operator in it).
   let scope: Prisma.LedgerEntryWhereInput;
-  if (user.role === "OPERATOR") {
-    if (query.operatorId !== undefined && query.operatorId !== user.id) {
-      throw forbidden("Operators can only see their own entries.");
-    }
-    scope = { operatorId: user.id };
-  } else if (query.operatorId !== undefined) {
-    const operator = await ctx.db.operator.findUnique({ where: { id: query.operatorId } });
-    if (!operator) throw notFound("Operator not found.");
-    scope = { operatorId: operator.id };
+  if (query.operatorId !== undefined) {
+    const subject = await requireAccessibleOperator(ctx.db, user, query.operatorId);
+    scope = { operatorId: subject.id };
   } else {
-    scope = { poolId: user.poolId };
+    scope = user.role === "OPERATOR" ? { operatorId: user.id } : { poolId: user.poolId };
   }
 
   // One extra row tells us whether another page exists without a second count query.
