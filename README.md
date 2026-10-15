@@ -15,7 +15,9 @@ npm run db:seed:demo             # tiers + demo operators and entries (or db:see
 npm run dev
 ```
 
-Checks: `npm run typecheck`, `npm run lint`, `npm test`.
+Checks: `npm run typecheck`, `npm run lint`, `npm test` (fast unit tests, no database needed).
+
+Integration tests run against real Postgres (`TEST_DATABASE_URL`, migrated automatically): `npm run test:int`. The ledger is append-only, so these tests can't clean up after themselves. Each test creates its own pool, tier and operator, and the test database just grows. To reset it: `docker compose down -v && docker compose up -d --wait`.
 
 ### Seeding
 
@@ -71,8 +73,33 @@ Decided by us while building; the client has not seen these yet, so confirm them
 - **Expiry boundary.** An entry counts from `effective_at` up to, but not including, `expires_at`. At exactly `expires_at` it is already expired. Nothing is counted twice at the boundary: if one entry expires at the instant its replacement takes effect, only the replacement counts. (Implemented and explained in `src/domain/ledger.ts`; the same rule applies to the capacity check.)
 - **Expiry base time.** Expiry is counted from `effective_at` (when it happened in the field), not from when the server recorded it.
 - **Adjustments.** A supervisor adjustment is a signed ledger entry that takes effect at its own `effective_at` and expires together with the entry it adjusts (the seed assumes this; the app rule is not written yet). Backdating an adjustment changes the balance and status from that moment on, never before it.
-- **Capacity** is measured in active (non-expired) units, not the cached `balance`. What happens when an allocation would exceed it (reject or warn) is not decided.
+- **Capacity** is measured in active (non-expired) units, not the cached `balance`. An allocation that would exceed it is **rejected** (422); the service assumes rejecting rather than warning, so confirm that with the client. Reaching capacity exactly is allowed.
+- **Timeouts.** A pool-lock timeout (3 s) and a whole-transaction timeout (5 s) both return `503` with `Retry-After: 1`; retrying with the same key is always safe.
 - **Two history views.** Supervisors see every balance change (`statusTimeline`). Operators see only the points where their status changes (`statusTransitions`), which are a subset of the supervisor points. The first point is always shown.
+
+## API
+
+### `POST /api/allocations`
+
+Logs an allocation for an operator. The server sets `effectiveAt` (now) and `expiresAt` (from the operator's tier); a request that includes either is rejected.
+
+```json
+{ "operatorId": "…", "units": 25, "idempotencyKey": "client-generated-unique-string" }
+```
+
+| Status | Meaning |
+| ------ | ------- |
+| `201` | Created. Body: `{ "replay": false, "entry": {…} }` |
+| `200` | The same `idempotencyKey` was already used with the same request: the original entry is returned (`"replay": true`) and nothing changes. Safe to resend after a timeout. |
+| `409` | `IDEMPOTENCY_KEY_REUSED`: that key was used with a different request. Compared: operator, kind, units, refSeq. |
+| `422` | `CAPACITY_EXCEEDED`: the pool's **active** units plus this allocation would exceed its capacity. |
+| `404` | `OPERATOR_NOT_FOUND` |
+| `400` | Invalid JSON or body. |
+| `503` | `BUSY` with `Retry-After: 1`: the pool lock (3 s) or the whole transaction (5 s) timed out. Nothing was written; **retry with the same `idempotencyKey`**. |
+
+There is no authentication yet: `operatorId` is trusted as sent.
+
+How it stays correct under simultaneous requests: see `allocate()` in [`src/server/allocate.ts`](./src/server/allocate.ts). In short, one READ COMMITTED transaction locks the pool row, then checks the idempotency key (after the lock, so it sees the previous holder's commit, and before the capacity check, so a replay is never refused for lack of space), then checks capacity, then inserts and increments the balance. The unique index on `(created_by_id, idempotency_key)` is the backstop.
 
 ## Next steps
 
