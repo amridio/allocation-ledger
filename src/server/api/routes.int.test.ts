@@ -26,7 +26,12 @@ afterAll(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const ctx = (now: Date = T0, extra: Partial<ApiContext> = {}): ApiContext => ({ db, clock: () => now, ...extra });
+const ctx = (now: Date = T0, extra: Partial<ApiContext> = {}): ApiContext => ({
+  db,
+  clock: () => now,
+  userSwitcherEnabled: true,
+  ...extra,
+});
 
 function request(
   path: string,
@@ -90,6 +95,15 @@ describe("authentication (temporary cookie)", () => {
       ctx(),
     );
     expect(metric.status).toBe(200);
+  });
+
+  it("switch-user is OFF unless explicitly enabled: 404 and no cookie, even for a valid user", async () => {
+    const w = await world();
+    for (const flag of [false, undefined]) {
+      const res = await switchUser(request("/api/switch-user", { body: { userId: w.op1 } }), ctx(T0, { userSwitcherEnabled: flag }));
+      expect(res.status).toBe(404);
+      expect(res.headers.get("set-cookie")).toBeNull();
+    }
   });
 
   it("switch-user: 404 for an unknown user, 400 for a bad body, and no cookie is set", async () => {
@@ -434,6 +448,24 @@ describe("GET /api/metric", () => {
       operator: { activeUnits: 10, status: "CRITICAL" }, // the first 30 expired; 10 is below the LOW cutoff
       pool: { activeUnits: 10, lifetimeBalance: 40 }, // the cached balance still includes expired units
     });
+  });
+
+  it("nextExpiryAt is the earliest expiry among the operator's active entries, and null when nothing will expire", async () => {
+    const w = await world({ expiryMinutes: 60 });
+    await give(w.op1, 30, "nx-1", T0); //                 expires T0+60
+    await give(w.op1, 10, "nx-2", minutes(T0, 20)); //    expires T0+80
+    const at30 = await (await getMetric(request("/api/metric", { as: w.op1 }), ctx(minutes(T0, 30)))).json();
+    expect(at30.nextExpiryAt).toBe(minutes(T0, 60).toISOString());
+
+    const at60 = await (await getMetric(request("/api/metric", { as: w.op1 }), ctx(minutes(T0, 60)))).json();
+    expect(at60.nextExpiryAt).toBe(minutes(T0, 80).toISOString()); // exactly at T0+60 the first is already gone
+
+    const at100 = await (await getMetric(request("/api/metric", { as: w.op1 }), ctx(minutes(T0, 100)))).json();
+    expect(at100.nextExpiryAt).toBeNull();
+
+    const never = await world({ expiryMinutes: null });
+    await give(never.op1, 30, "nx-3");
+    expect((await (await getMetric(request("/api/metric", { as: never.op1 }), ctx())).json()).nextExpiryAt).toBeNull();
   });
 
   it("a brand-new operator is 0 units and CRITICAL", async () => {

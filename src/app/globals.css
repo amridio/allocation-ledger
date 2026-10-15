@@ -1,19 +1,55 @@
 @import "tailwindcss";
 
-/* Light theme only: the app must stay readable in bright sunlight. */
-:root {
-  --background: #ffffff;
-  --foreground: #0a0a0a;
-}
+/*
+ * Warehouse palette: phones in bright light, gloves. Dark text on white, no light-grey text,
+ * 7:1 contrast or better (checked by src/ui/palette.test.ts, which reads this file).
+ * Status is NEVER colour alone: every status also has its own icon shape and a word.
+ */
+@theme {
+  --color-page: #ffffff;
+  --color-ink: #111827;
+  --color-ink-soft: #374151;
+  --color-border: #374151;
+  --color-action: #111827;
+  --color-action-text: #ffffff;
+  --color-focus: #1e40af;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-status-critical: #991b1b;
+  --color-status-critical-bg: #fef2f2;
+  --color-status-low: #78350f;
+  --color-status-low-bg: #fffbeb;
+  --color-status-normal: #14532d;
+  --color-status-normal-bg: #f0fdf4;
+  --color-status-high: #1e3a8a;
+  --color-status-high-bg: #eff6ff;
+
+  --color-danger: #7f1d1d;
+  --color-danger-bg: #fef2f2;
+  --color-pending-bg: #f3f4f6;
+
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+html {
+  font-size: 18px; /* base text is larger than the browser default */
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-page);
+  color: var(--color-ink);
   font-family: var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* A thick, high-contrast focus ring that never relies on the colour of the element it's on. */
+:focus-visible {
+  outline: 4px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

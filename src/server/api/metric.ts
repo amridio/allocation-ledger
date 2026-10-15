@@ -1,7 +1,5 @@
-import { operatorMetric } from "@/domain/metric";
 import { metricQuerySchema } from "@/domain/queries";
-import { getActiveUnits } from "../ledger-tx";
-import { loadOperatorEntries } from "../ledger-read";
+import { getMetricDto } from "../queries/metric";
 import { requireAccessibleOperator } from "./access";
 import { requireUser } from "./auth";
 import type { ApiContext } from "./context";
@@ -20,19 +18,5 @@ export const getMetric = route(async (request: Request, ctx: ApiContext) => {
 
   const subject = await requireAccessibleOperator(ctx.db, user, query.operatorId ?? user.id);
 
-  const now = ctx.clock();
-  const metric = operatorMetric(await loadOperatorEntries(ctx.db, subject.id), now);
-  const pool = await ctx.db.pool.findUniqueOrThrow({ where: { id: subject.poolId } });
-
-  return jsonResponse({
-    asOf: now,
-    operator: { id: subject.id, name: subject.name, ...metric },
-    pool: {
-      id: pool.id,
-      name: pool.name,
-      capacity: pool.capacity,
-      activeUnits: await getActiveUnits(ctx.db, pool.id, now),
-      lifetimeBalance: pool.balance,
-    },
-  });
+  return jsonResponse(await getMetricDto(ctx.db, subject, ctx.clock()));
 });

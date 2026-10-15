@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@/generated/prisma/client";
 import { ApiError } from "./errors";
-import { readCookie, requireRole, requireUser, sessionCookie, SESSION_COOKIE } from "./auth";
+import { findSessionUser, readCookie, requireRole, requireUser, sessionCookie, SESSION_COOKIE } from "./auth";
 
 const withCookie = (cookie?: string) =>
   new Request("http://localhost/api/x", { headers: cookie === undefined ? {} : { cookie } });
@@ -78,5 +78,24 @@ describe("requireUser / requireRole", () => {
     expect(() => requireRole(user("SUPERVISOR"), "SUPERVISOR")).not.toThrow();
     expect(() => requireRole(user("OPERATOR"), "SUPERVISOR")).toThrowError(expect.objectContaining({ status: 403 }));
     expect(() => requireRole(user("SUPERVISOR"), "OPERATOR")).toThrowError(expect.objectContaining({ status: 403 }));
+  });
+});
+
+describe("findSessionUser (shared by the API and the server-rendered page)", () => {
+  const row = { id: "op_7", name: "Ada", role: "OPERATOR", poolId: "pool_1", tierId: "t" };
+
+  it("returns null, without touching the database, for a missing id", async () => {
+    const findUnique = vi.fn();
+    const db = { operator: { findUnique } } as unknown as PrismaClient;
+    expect(await findSessionUser(db, undefined)).toBeNull();
+    expect(await findSessionUser(db, "")).toBeNull();
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it("returns null for an unknown user and the session user for a known one", async () => {
+    const none = { operator: { findUnique: async () => null } } as unknown as PrismaClient;
+    const some = { operator: { findUnique: async () => row } } as unknown as PrismaClient;
+    expect(await findSessionUser(none, "ghost")).toBeNull();
+    expect(await findSessionUser(some, "op_7")).toEqual({ id: "op_7", name: "Ada", role: "OPERATOR", poolId: "pool_1" });
   });
 });

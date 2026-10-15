@@ -47,13 +47,18 @@ export function sessionCookie(userId: string, options: { secure?: boolean } = {}
   ].join("; ");
 }
 
+/** The user with this id as a SessionUser, or null (no id, or no such user). Shared by the API and the server-rendered page. */
+export async function findSessionUser(db: PrismaClient, id: string | undefined): Promise<SessionUser | null> {
+  if (!id) return null;
+  const user = await db.operator.findUnique({ where: { id } });
+  return user ? { id: user.id, name: user.name, role: user.role, poolId: user.poolId } : null;
+}
+
 /** The logged-in user, or a 401. */
 export async function requireUser(request: Request, db: PrismaClient): Promise<SessionUser> {
-  const id = readCookie(request, SESSION_COOKIE);
-  if (!id) throw unauthenticated();
-  const user = await db.operator.findUnique({ where: { id } });
+  const user = await findSessionUser(db, readCookie(request, SESSION_COOKIE));
   if (!user) throw unauthenticated();
-  return { id: user.id, name: user.name, role: user.role, poolId: user.poolId };
+  return user;
 }
 
 export function requireRole(user: SessionUser, role: Role): void {

@@ -1,7 +1,7 @@
 import { allocateBodySchema } from "@/domain/allocation";
 import { entriesQuerySchema } from "@/domain/queries";
-import type { Prisma } from "@/generated/prisma/client";
 import { allocate } from "../allocate";
+import { getEntriesPageDto, type EntriesScope } from "../queries/entries";
 import { requireAccessibleOperator } from "./access";
 import { requireRole, requireUser } from "./auth";
 import type { ApiContext } from "./context";
@@ -31,7 +31,7 @@ export const listEntries = route(async (request: Request, ctx: ApiContext) => {
 
   // With ?operatorId= the subject must pass the shared read rule. Without it: an operator sees their
   // own entries, a supervisor their whole pool (every entry in a pool belongs to an operator in it).
-  let scope: Prisma.LedgerEntryWhereInput;
+  let scope: EntriesScope;
   if (query.operatorId !== undefined) {
     const subject = await requireAccessibleOperator(ctx.db, user, query.operatorId);
     scope = { operatorId: subject.id };
@@ -39,13 +39,5 @@ export const listEntries = route(async (request: Request, ctx: ApiContext) => {
     scope = user.role === "OPERATOR" ? { operatorId: user.id } : { poolId: user.poolId };
   }
 
-  // One extra row tells us whether another page exists without a second count query.
-  const rows = await ctx.db.ledgerEntry.findMany({
-    where: { ...scope, ...(query.cursor === undefined ? {} : { seq: { lt: query.cursor } }) },
-    orderBy: { seq: "desc" },
-    take: query.limit + 1,
-  });
-  const hasMore = rows.length > query.limit;
-  const entries = hasMore ? rows.slice(0, query.limit) : rows;
-  return jsonResponse({ entries, nextCursor: hasMore ? (entries.at(-1)?.seq ?? null) : null });
+  return jsonResponse(await getEntriesPageDto(ctx.db, scope, { cursor: query.cursor, limit: query.limit }));
 });

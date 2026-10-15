@@ -1,6 +1,5 @@
-import { statusTimeline, statusTransitions } from "@/domain/ledger";
 import { timelineQuerySchema } from "@/domain/queries";
-import { loadOperatorEntries } from "../ledger-read";
+import { getTimelineDto } from "../queries/timeline";
 import { requireAccessibleOperator } from "./access";
 import { requireUser } from "./auth";
 import type { ApiContext } from "./context";
@@ -22,7 +21,5 @@ export const getTimeline = route(async (request: Request, ctx: ApiContext, opera
   if (user.role === "OPERATOR" && query.view === "full") throw forbidden("The full timeline is for supervisors.");
 
   const view = query.view ?? (user.role === "SUPERVISOR" ? "full" : "transitions");
-  const entries = await loadOperatorEntries(ctx.db, operator.id);
-  const points = view === "full" ? statusTimeline(entries) : statusTransitions(entries);
-  return jsonResponse({ operatorId: operator.id, view, asOf: ctx.clock(), points });
+  return jsonResponse(await getTimelineDto(ctx.db, operator, view, ctx.clock()));
 });
