@@ -16,6 +16,7 @@ import {
   useServerClock,
   useTimeline,
 } from "@/ui/hooks";
+import { dashboardHref, entriesKeyFor, scopeKeysFor } from "@/ui/entries-scope";
 import { newIdempotencyKey } from "@/ui/idempotency";
 import { initialOutbox, outboxReducer, pendingUnits } from "@/ui/outbox";
 import { changedPointKeys } from "@/ui/timeline-diff";
@@ -25,6 +26,7 @@ import { AdjustDialog, type AdjustBody } from "./adjust-dialog";
 import { AppHeader } from "./app-header";
 import { LogAllocationForm } from "./log-allocation-form";
 import { LogAllocationSheet } from "./log-allocation-sheet";
+import { LogScopeToggle } from "./log-scope-toggle";
 import { MetricCard } from "./metric-card";
 import { NoticeList } from "./notice-list";
 import { OperatorPicker } from "./operator-picker";
@@ -77,7 +79,13 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
 
   // ---- server data, kept fresh ----
   const metric = useMetric(api, subject.id, data.metric, config.pollMs).data;
-  const log = useEntriesLog(api, data.entriesScope, data.entries, config.pollMs);
+  const logAll = data.entriesScope === "pool";
+  const log = useEntriesLog(
+    api,
+    { key: entriesKeyFor(data.entriesScope, subject.id), operatorId: data.entriesScope === "operator" ? subject.id : undefined },
+    data.entries,
+    config.pollMs,
+  );
   const timeline = useTimeline(api, subject.id, view, data.timeline).data;
   const clock = useServerClock(metric.asOf);
 
@@ -108,18 +116,28 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   const [outbox, dispatch] = useReducer(outboxReducer, initialOutbox);
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  /** Puts a confirmed entry at the top of every cached log it belongs in (pool, its operator, self), and no other. */
+  const addToLogs = useCallback(
+    (entry: EntryDto) => {
+      for (const key of scopeKeysFor(entry)) {
+        queryClient.setQueryData<EntriesPageDto>(["entries", key], (page) =>
+          page && !page.entries.some((e) => e.seq === entry.seq) ? { ...page, entries: [entry, ...page.entries] } : page,
+        );
+      }
+    },
+    [queryClient],
+  );
+
   const confirmAllocation = useCallback(
     async (key: string, result: WriteResult) => {
       // Replace the guess with the server's own figure; ignore any older in-flight poll.
       await queryClient.cancelQueries({ queryKey: ["metric", subject.id] });
       queryClient.setQueryData(["metric", subject.id], result.metric);
-      queryClient.setQueryData<EntriesPageDto>(["entries", data.entriesScope], (page) =>
-        page && !page.entries.some((e) => e.seq === result.entry.seq) ? { ...page, entries: [result.entry, ...page.entries] } : page,
-      );
+      addToLogs(result.entry);
       dispatch({ type: "sent", key }); // same tick as the line above: one render, no dip and no double count
       void queryClient.invalidateQueries({ queryKey: ["timeline", subject.id] });
     },
-    [queryClient, subject.id, data.entriesScope],
+    [queryClient, subject.id, addToLogs],
   );
 
   const sendAllocation = useCallback(
@@ -163,7 +181,7 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   // ---- supervisor: adjust a past entry ----
   const [adjustTarget, setAdjustTarget] = useState<EntryDto | null>(null);
   const startAdjust = (entry: EntryDto) => {
-    if (entry.operatorId !== subject.id) router.replace(`/?operator=${encodeURIComponent(entry.operatorId)}`); // so the history behind the dialog is theirs
+    if (entry.operatorId !== subject.id) router.replace(dashboardHref({ operatorId: entry.operatorId, logAll })); // so the history behind the dialog is theirs
     setAdjustTarget(entry);
   };
   const submitAdjustment = useCallback(
@@ -172,13 +190,11 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
       const operatorId = result.metric.operator.id;
       await queryClient.cancelQueries({ queryKey: ["metric", operatorId] });
       queryClient.setQueryData(["metric", operatorId], result.metric);
-      queryClient.setQueryData<EntriesPageDto>(["entries", data.entriesScope], (page) =>
-        page && !page.entries.some((e) => e.seq === result.entry.seq) ? { ...page, entries: [result.entry, ...page.entries] } : page,
-      );
+      addToLogs(result.entry);
       // Re-reading the history is what lets the page highlight the points that were recalculated.
       await queryClient.invalidateQueries({ queryKey: ["timeline", operatorId] });
     },
-    [api, queryClient, data.entriesScope],
+    [api, queryClient, addToLogs],
   );
 
   // ---- what to show ----
@@ -213,7 +229,7 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
       <div className="mt-4 flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)] lg:items-start lg:gap-6">
         {/* column 1: the form (operators; on a phone it lives in the bottom sheet) or the operator picker (supervisors) */}
         {isSupervisor && operators ? (
-          <OperatorPicker operators={operators} selectedId={subject.id} />
+          <OperatorPicker operators={operators} selectedId={subject.id} logAll={logAll} />
         ) : (
           <div className="hidden lg:block" data-testid="desktop-form">
             <LogAllocationForm idPrefix="desktop" framed onSubmit={logAllocation} />
@@ -259,7 +275,14 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
           loadingMore={log.loadingMore}
           loadError={log.loadError}
           onLoadMore={() => void log.loadMore()}
-          scopeText={isSupervisor ? `Everyone in ${metric.pool.name}` : "Your allocations and corrections"}
+          scopeText={
+            !isSupervisor
+              ? "Your allocations and corrections"
+              : logAll
+                ? `Everyone in ${metric.pool.name}`
+                : `${subject.name}'s allocations and corrections`
+          }
+          scopeToggle={isSupervisor ? <LogScopeToggle operatorId={subject.id} logAll={logAll} /> : undefined}
         />
       </div>
 

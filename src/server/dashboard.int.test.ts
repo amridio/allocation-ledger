@@ -53,12 +53,12 @@ describe("loadDashboard: what the server renders on first open", () => {
     expect(JSON.stringify(data)).not.toContain('"units":99');
   });
 
-  it("a supervisor gets the pool's operators, the pool-wide log, and the full timeline of the selected operator", async () => {
+  it("a supervisor gets the pool's operators, the full timeline of the selected operator, and (with the 'everyone' toggle) the pool-wide log", async () => {
     const s = await site();
     await s.give(s.op1, 30, "d-4");
     await s.give(s.op2, 40, "d-5");
     await s.give(s.farOp, 777, "d-far");
-    const data = await loadDashboard(db, await s.user(s.sup), s.op2, minutes(T0, 5));
+    const data = await loadDashboard(db, await s.user(s.sup), s.op2, minutes(T0, 5), true);
 
     expect(data.subject).toMatchObject({ id: s.op2, name: "Ben" });
     expect(data.operators?.map((o) => o.id).sort()).toEqual([s.op1, s.op2, s.sup].sort());
@@ -66,6 +66,58 @@ describe("loadDashboard: what the server renders on first open", () => {
     expect(data.entriesScope).toBe("pool");
     expect(data.metric.operator).toMatchObject({ id: s.op2, activeUnits: 40 });
     expect(data.timeline).toMatchObject({ operatorId: s.op2, view: "full" });
+  });
+
+  it("a supervisor's log defaults to ONLY the selected operator's entries, so the entry to correct is right there", async () => {
+    const s = await site();
+    await s.give(s.op1, 30, "f-1");
+    await s.give(s.op2, 40, "f-2");
+    await s.give(s.op2, 41, "f-3");
+    await s.give(s.farOp, 777, "f-far");
+    const data = await loadDashboard(db, await s.user(s.sup), s.op2, minutes(T0, 5));
+
+    expect(data.entriesScope).toBe("operator");
+    expect(data.entries.entries.map((e) => e.units).sort()).toEqual([40, 41]);
+    expect(data.entries.entries.every((e) => e.operatorId === s.op2)).toBe(true);
+    expect(JSON.stringify(data.entries)).not.toContain("777");
+  });
+
+  it("the filter follows the selected operator, and includes adjustments made to their entries", async () => {
+    const s = await site();
+    const target = await s.give(s.op1, 30, "f-4");
+    await s.give(s.op2, 40, "f-5");
+    await adjust(deps(minutes(T0, 5)), { supervisorId: s.sup, targetSeq: target.seq, units: -5, reason: "r", idempotencyKey: "f-adj" });
+
+    const forOp1 = await loadDashboard(db, await s.user(s.sup), s.op1, minutes(T0, 10));
+    expect(forOp1.entries.entries.map((e) => e.kind).sort()).toEqual(["ADJUSTMENT", "ALLOCATION"]);
+    const forOp2 = await loadDashboard(db, await s.user(s.sup), s.op2, minutes(T0, 10));
+    expect(forOp2.entries.entries.map((e) => e.units)).toEqual([40]);
+  });
+
+  it("with no operator chosen the default operator's entries are shown (not the pool's)", async () => {
+    const s = await site();
+    await s.give(s.op1, 30, "f-6");
+    await s.give(s.op2, 40, "f-7");
+    const data = await loadDashboard(db, await s.user(s.sup), undefined, T0); // default subject: Ben (op2)
+    expect(data.entriesScope).toBe("operator");
+    expect(data.entries.entries.map((e) => e.operatorId)).toEqual([s.op2]);
+  });
+
+  it("a supervisor asking for a filtered log of another site's operator gets the default's entries and nothing from that site", async () => {
+    const s = await site();
+    await s.give(s.farOp, 777, "f-far-2");
+    const data = await loadDashboard(db, await s.user(s.sup), s.farOp, T0);
+    expect(data.subject.id).not.toBe(s.farOp);
+    expect(JSON.stringify(data)).not.toContain("777");
+  });
+
+  it("the 'everyone' toggle never widens an operator's view: operators still see only their own entries", async () => {
+    const s = await site();
+    await s.give(s.op1, 5, "f-8");
+    await s.give(s.op2, 99, "f-9");
+    const data = await loadDashboard(db, await s.user(s.op1), undefined, T0, true);
+    expect(data.entriesScope).toBe("self");
+    expect(data.entries.entries.map((e) => e.units)).toEqual([5]);
   });
 
   it("a supervisor defaults to the first operator (by name) when none is selected, never to themselves", async () => {

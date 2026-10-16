@@ -40,6 +40,8 @@ async function check(name, fn) {
 function assert(cond, message) {
   if (!cond) throw new Error(message);
 }
+/** The other site's 777 units, as a standalone number (the run id is base36 and could contain "777" by chance). */
+const leaksFar = (html) => /(^|[^0-9a-z_])777([^0-9a-z_]|$)/i.test(html);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- servers
@@ -180,7 +182,7 @@ const contrastReport = (page) =>
 const spills = (page) =>
   page.evaluate(`(() => { ${visibleScript}
     const out = [];
-    const cards = document.querySelectorAll('[data-testid="activity-row"], [data-testid="pending-row"], [data-testid="timeline-point"], [data-testid="metric-card"], [data-testid="notice"]');
+    const cards = document.querySelectorAll('[data-testid="activity-row"], [data-testid="pending-row"], [data-testid="timeline-point"], [data-testid="metric-card"], [data-testid="notice"], [data-testid="adjust-dialog"], [data-testid="activity-log"]');
     for (const card of cards) {
       if (!visible(card)) continue;
       const box = card.getBoundingClientRect();
@@ -503,7 +505,7 @@ try {
   await s.waitForSelector('[data-testid="operator-picker"]');
   await shot(s, "08-desktop-supervisor");
 
-  await check("supervisor: operator picker, the whole pool's log with an Adjust button on every allocation, and no other site's data", async () => {
+  await check("supervisor: the picker, and a log of ONLY the selected operator (Ada) with an Adjust button on every allocation, and no other site's data", async () => {
     const options = await s.locator('[data-testid="operator-picker"] option').allInnerTexts();
     assert(options.some((o) => o.includes("Ada")) && options.some((o) => o.includes("Ben")), `picker shows ${options.join(", ")}`);
     assert(!options.some((o) => o.includes("Far Away")), "the other site's operator is in the picker");
@@ -511,30 +513,43 @@ try {
     const allocations = await rows.evaluateAll((els) => els.filter((e) => e.getAttribute("data-kind") === "ALLOCATION").length);
     const adjustButtons = await s.locator('[data-testid="adjust-button"]').count();
     assert(allocations === adjustButtons && adjustButtons > 0, `${allocations} allocation rows but ${adjustButtons} Adjust buttons`);
+    const people = await rows.evaluateAll((els) => els.map((e) => e.textContent));
+    assert(people.length > 0 && people.every((t) => t.includes("Ada")), "every row should be Ada's");
+    assert(!people.some((t) => t.includes("Ben") || t.includes("Cy")), "another operator's row is in the filtered log");
+    assert(await s.locator('[data-testid="log-scope-operator"]').getAttribute("aria-pressed") === "true", "the operator filter should be on");
+    assert(await s.locator('[data-testid="log-scope-all"]').getAttribute("aria-pressed") === "false", "Everyone should be off");
+    assert(!(await s.locator('[data-testid="load-more"]').isVisible()), "Ada's own log fits one page: nothing to page through");
     const html = await s.content();
-    assert(!html.includes("777"), "the other site's numbers are on the page");
-  });
-
-  await check("supervisor: choosing an operator in the picker loads their numbers from the server (no loading state)", async () => {
-    // Ada is the default (first by name), so look at Ben first and then come back, to see real navigations
-    await s.locator('[data-testid="operator-picker"]').selectOption({ label: "Ben Lindqvist" });
-    await s.waitForFunction(() => document.querySelector('[data-testid="metric-card"]')?.textContent?.includes("Ben Lindqvist"));
-    assert((await metricText(s)) === "32", `Ben should be 32, got ${await metricText(s)}`);
-    await s.locator('[data-testid="operator-picker"]').selectOption({ label: "Ada Okafor" });
-    await s.waitForFunction(() => document.querySelector('[data-testid="metric-card"]')?.textContent?.includes("Ada Okafor"));
-    assert((await metricText(s)) === "125", `Ada should be 125, got ${await metricText(s)}`);
-    assert(new URL(s.url()).searchParams.get("operator") === id("ada"), "the URL should name the operator");
+    assert(!leaksFar(html), "the other site's numbers are on the page");
   });
 
   await check("supervisor: a hand-edited URL naming another site's operator falls back to the default and leaks nothing", async () => {
     const page = await supCtx.newPage();
     await page.goto(`/?operator=${id("far")}`);
     await page.waitForSelector('[data-testid="metric-value"]');
-    assert(!(await page.content()).includes("Far Away") && !(await page.content()).includes("777"), "the other site leaked");
+    assert(!(await page.content()).includes("Far Away") && !leaksFar(await page.content()), "the other site leaked");
     await page.close();
   });
 
-  await check("the log pages: Load older entries brings more, with no duplicates", async () => {
+  await check("supervisor: the 'Everyone' toggle widens the log to the whole pool, is kept in the URL, and survives changing operator", async () => {
+    await s.locator('[data-testid="log-scope-all"]').click();
+    await s.waitForFunction(() => new URL(location.href).searchParams.get("log") === "all");
+    await s.waitForFunction(() => document.querySelector('[data-testid="log-scope-text"]')?.textContent?.startsWith("Everyone in"));
+    assert(await s.locator('[data-testid="log-scope-all"]').getAttribute("aria-pressed") === "true", "Everyone should be on");
+    assert((await s.locator('[data-testid="load-more"]').isVisible()), "the pool log has more than one page");
+    const names = await s.locator('[data-testid="activity-row"]').evaluateAll((els) => els.map((e) => e.textContent));
+    assert(names.some((t) => t.includes("Cy")), "Cy's entries should be in the pool log");
+    assert(!leaksFar(await s.content()), "the other site leaked into the pool log");
+    // changing operator keeps "Everyone", and the metric still follows the picker
+    await s.locator('[data-testid="operator-picker"]').selectOption({ label: "Ben Lindqvist" });
+    await s.waitForFunction(() => document.querySelector('[data-testid="metric-card"]')?.textContent?.includes("Ben Lindqvist"));
+    const url = new URL(s.url());
+    assert(url.searchParams.get("log") === "all" && url.searchParams.get("operator") === id("ben"), `URL lost a choice: ${url.search}`);
+    assert(await s.locator('[data-testid="log-scope-all"]').getAttribute("aria-pressed") === "true", "Everyone should still be on");
+    assert((await s.locator('[data-testid="log-scope-text"]').innerText()).startsWith("Everyone in"), "the pool log should still be shown");
+  });
+
+  await check("the log pages (Everyone): Load older entries brings more, with no duplicates", async () => {
     const seqs = () => s.locator('[data-testid="activity-row"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-seq")));
     const first = await seqs();
     await s.locator('[data-testid="load-more"]').scrollIntoViewIfNeeded();
@@ -545,6 +560,17 @@ try {
     assert(all.length > first.length, "no more rows loaded");
     const sorted = [...all].sort((x, y) => Number(y) - Number(x));
     assert(JSON.stringify(sorted) === JSON.stringify(all), "rows are not newest-first");
+  });
+
+  await check("supervisor: toggling back to one operator drops the paged-in rows (nothing from the pool view lingers)", async () => {
+    await s.locator('[data-testid="operator-picker"]').selectOption({ label: "Ada Okafor" });
+    await s.waitForFunction(() => document.querySelector('[data-testid="metric-card"]')?.textContent?.includes("Ada Okafor"));
+    await s.locator('[data-testid="log-scope-operator"]').click();
+    await s.waitForFunction(() => !new URL(location.href).searchParams.has("log"));
+    await s.waitForFunction(() => document.querySelector('[data-testid="log-scope-all"]')?.getAttribute("aria-pressed") === "false");
+    const rows = await s.locator('[data-testid="activity-row"]').evaluateAll((els) => els.map((e) => e.textContent));
+    assert(rows.length > 0 && rows.every((t) => t.includes("Ada")), `rows from other operators lingered: ${rows.length}`);
+    assert(!(await s.locator('[data-testid="load-more"]').isVisible()), "load-more should be gone for Ada's short log");
   });
 
   const fullTimeline = () =>
@@ -638,19 +664,88 @@ try {
     await s.unroute("**/api/adjustments");
   });
 
-  await check("other people's writes show up on their own within a few seconds (the 3 s poll)", async () => {
-    const before = await s.locator('[data-testid="activity-row"]').count();
-    const res = await fetch(`${main.base}/api/entries`, {
-      method: "POST",
-      headers: { cookie: `uid=${id("cy")}`, "content-type": "application/json", "Idempotency-Key": `poll-${RUN}` },
-      body: JSON.stringify({ units: 3 }),
-    });
-    assert(res.status === 201, `setup write failed: ${res.status}`);
+  await check("other people's writes show up on their own within a few seconds (the 3 s poll), and only in the log they belong to", async () => {
+    const before = await s.locator('[data-testid="activity-row"]').count(); // Ada's log
+    const write = (who, units, key) =>
+      fetch(`${main.base}/api/entries`, {
+        method: "POST",
+        headers: { cookie: `uid=${id(who)}`, "content-type": "application/json", "Idempotency-Key": `${key}-${RUN}` },
+        body: JSON.stringify({ units }),
+      });
+    assert((await write("cy", 3, "poll-cy")).status === 201, "setup write (Cy) failed");
+    assert((await write("ada", 4, "poll-ada")).status === 201, "setup write (Ada) failed");
     const started = Date.now();
     await s.waitForFunction((n) => document.querySelectorAll('[data-testid="activity-row"]').length > n, before, { timeout: 8_000 });
     console.log(`      appeared after ${Date.now() - started} ms`);
+    await sleep(3_500); // a whole extra poll: Cy's entry must still not show up in Ada's log
+    const after = await s.locator('[data-testid="activity-row"]').evaluateAll((els) => els.map((e) => e.textContent));
+    assert(after.length === before + 1, `Ada's log should grow by exactly 1 (Ada's write), went ${before} -> ${after.length}`);
+    assert(after.every((t) => t.includes("Ada")), "Cy's entry leaked into Ada's filtered log");
   });
   await supCtx.close();
+
+  // ======================================================== supervisor on a phone: the filter, and the adjust dialog as a bottom sheet
+  const supPhone = await newContext(main.base, "mobile", "eli");
+  const sm = await supPhone.newPage();
+  await sm.goto(`/?operator=${id("ada")}`);
+  await sm.waitForSelector('[data-testid="log-scope"]');
+  await shot(sm, "14-mobile-supervisor");
+
+  await check("supervisor on a phone: the filter and the log fit the screen (no sideways scroll, nothing spills, controls >= 48px, 7:1 contrast)", async () => {
+    const overflow = await sm.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(overflow <= 0, `page is ${overflow}px wider than the screen`);
+    const out = await spills(sm);
+    assert(out.length === 0, `${out.length} element(s) poke out of their card: ${JSON.stringify(out.slice(0, 4))}`);
+    const small = (await controls(sm)).filter((c) => c.h < 48);
+    assert(small.length === 0, `too small: ${JSON.stringify(small)}`);
+    const weak = (await contrastReport(sm)).filter((r) => r.ratio < 7).map((r) => `"${r.text}" ${r.ratio.toFixed(2)}:1`);
+    assert(weak.length === 0, `low contrast: ${weak.join("; ")}`);
+    const both = await sm.locator('[data-testid="log-scope"] button').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.left, r.right]; }));
+    assert(both.length === 2 && both.every(([l, r]) => l >= 0 && r <= 390), `filter buttons are cut off: ${JSON.stringify(both)}`);
+    const state = await sm.locator('[data-testid="log-scope"] button').evaluateAll((els) => els.map((e) => e.textContent.trim()));
+    assert(state[0].startsWith("✓") && !state[1].startsWith("✓"), `which filter is on must be readable without colour: ${JSON.stringify(state)}`);
+  });
+
+  await check("supervisor on a phone: the filter toggle works with a tap, and Everyone also fits the screen", async () => {
+    await sm.locator('[data-testid="log-scope-all"]').tap();
+    await sm.waitForFunction(() => new URL(location.href).searchParams.get("log") === "all");
+    await sm.waitForFunction(() => document.querySelector('[data-testid="log-scope-text"]')?.textContent?.startsWith("Everyone in"));
+    const overflow = await sm.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(overflow <= 0, `page is ${overflow}px wider than the screen`);
+    const out = await spills(sm);
+    assert(out.length === 0, `${out.length} element(s) poke out of their card: ${JSON.stringify(out.slice(0, 4))}`);
+    await sm.locator('[data-testid="log-scope-operator"]').tap();
+    await sm.waitForFunction(() => !new URL(location.href).searchParams.has("log"));
+    await sm.waitForFunction(() => document.querySelector('[data-testid="log-scope-text"]')?.textContent?.includes("allocations and corrections"));
+  });
+
+  await check("supervisor on a phone: Adjust opens a bottom sheet (full width, flush with the bottom edge) whose buttons are within thumb reach and inside the sheet", async () => {
+    const row = await revealRow(sm, "+60");
+    await row.locator('[data-testid="adjust-button"]').tap();
+    await sm.waitForSelector('[data-testid="adjust-dialog"][open]');
+    await sm.waitForTimeout(300);
+    const dlg = await sm.locator('[data-testid="adjust-dialog"]').boundingBox();
+    const view = sm.viewportSize();
+    assert(dlg, "no dialog box");
+    assert(Math.abs(dlg.x) <= 1 && Math.abs(dlg.width - view.width) <= 1, `the sheet should span the screen width: x=${dlg.x} w=${dlg.width}`);
+    assert(Math.abs(dlg.y + dlg.height - view.height) <= 1, `the sheet should sit on the bottom edge: bottom=${dlg.y + dlg.height}, screen=${view.height}`);
+    assert(dlg.y > 0, "the sheet should leave a strip of the page visible above it");
+    for (const testid of ["adjust-save", "adjust-cancel"]) {
+      const b = await sm.locator(`[data-testid="${testid}"]`).boundingBox();
+      assert(b && b.y + b.height <= dlg.y + dlg.height + 0.5 && b.y >= dlg.y, `${testid} is not inside the sheet`);
+      const centre = b.y + b.height / 2;
+      assert(centre >= view.height * 0.6, `${testid} is at ${Math.round(centre)}px of ${view.height}: out of thumb reach (needs the lower 40%)`);
+      assert(b.height >= 56, `${testid} is only ${b.height}px tall`);
+    }
+    const out = await spills(sm);
+    assert(out.length === 0, `${out.length} element(s) poke out of the sheet: ${JSON.stringify(out.slice(0, 4))}`);
+    const small = (await controls(sm)).filter((c) => c.h < 48);
+    assert(small.length === 0, `sheet controls too small: ${JSON.stringify(small)}`);
+    await shot(sm, "15-mobile-adjust-sheet");
+    await sm.locator('[data-testid="adjust-cancel"]').tap();
+    await sm.waitForSelector('[data-testid="adjust-dialog"]', { state: "detached" });
+  });
+  await supPhone.close();
 
   // ======================================================== expiry at the exact moment (poll interval 60 s, so only the scheduled refetch can do it)
   await check("expiry: the number and status change at the exact moment an entry expires, not at the next poll (poll is 60 s here)", async () => {

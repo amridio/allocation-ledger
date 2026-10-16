@@ -3,10 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 import type { PoolOperatorDto } from "@/domain/wire";
+import { dashboardHref } from "@/ui/entries-scope";
 import { CARD, INPUT, LABEL } from "@/ui/styles";
 
 /** Supervisors choose whose metric and status history to look at. Changing it reloads from the server, so there is no empty state. */
-export function OperatorPicker({ operators, selectedId }: { operators: PoolOperatorDto[]; selectedId: string }) {
+export function OperatorPicker({ operators, selectedId, logAll }: { operators: PoolOperatorDto[]; selectedId: string; logAll: boolean }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   return (
@@ -21,7 +22,7 @@ export function OperatorPicker({ operators, selectedId }: { operators: PoolOpera
         aria-busy={pending}
         onChange={(e) => {
           const id = e.target.value;
-          startTransition(() => router.replace(`/?operator=${encodeURIComponent(id)}`));
+          startTransition(() => router.replace(dashboardHref({ operatorId: id, logAll })));
         }}
         className={INPUT}
       >

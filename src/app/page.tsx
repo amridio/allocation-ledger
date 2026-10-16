@@ -39,7 +39,7 @@ export default async function Page({ searchParams }: PageProps<"/">) {
   }
 
   const requested = typeof params["operator"] === "string" ? params["operator"] : undefined;
-  const data = await loadDashboard(db, user, requested, new Date());
+  const data = await loadDashboard(db, user, requested, new Date(), params["log"] === "all");
   const pollMs = Number(process.env["UI_POLL_MS"]);
   return (
     <main>

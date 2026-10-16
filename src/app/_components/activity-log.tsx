@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { EntryDto } from "@/domain/wire";
 import type { ApiClientError } from "@/ui/api-client";
 import { describeExpiry, formatSigned } from "@/ui/format";
@@ -26,6 +27,8 @@ interface Props {
   loadError: ApiClientError | null;
   onLoadMore: () => void;
   scopeText: string;
+  /** Supervisors: the filter between "this operator" and "everyone". */
+  scopeToggle?: ReactNode;
 }
 
 export function ActivityLog(props: Props) {
@@ -35,7 +38,10 @@ export function ActivityLog(props: Props) {
       <h2 id="log-heading" className={HEADING}>
         Activity
       </h2>
-      <p className="mb-3 text-lg">{props.scopeText}</p>
+      <p className="mb-3 text-lg" data-testid="log-scope-text">
+        {props.scopeText}
+      </p>
+      {props.scopeToggle}
 
       {entries.length === 0 && outbox.length === 0 ? (
         <p className="text-lg font-bold" data-testid="log-empty">

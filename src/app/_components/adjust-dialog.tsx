@@ -102,7 +102,7 @@ export function AdjustDialog({
   }
 
   const segment = (active: boolean) =>
-    `${BTN_SECONDARY} flex-1 ${active ? "!bg-action !text-action-text" : ""}`;
+    `${BTN_SECONDARY} min-w-0 flex-1 !gap-2 !px-3 ${active ? "!bg-action !text-action-text" : ""}`;
 
   return (
     <dialog
@@ -189,7 +189,7 @@ export function AdjustDialog({
         )}
 
         <div className="mt-5 grid grid-cols-2 gap-3">
-          <button type="button" onClick={onClose} className={BTN_SECONDARY}>
+          <button type="button" data-testid="adjust-cancel" onClick={onClose} className={BTN_SECONDARY}>
             Cancel
           </button>
           <button type="submit" data-testid="adjust-save" disabled={saving} className={BTN_PRIMARY}>

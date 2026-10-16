@@ -103,15 +103,23 @@ export function useExpiryRefetch(
  * The poll asks for enough rows to reach back over everything already loaded, so new entries can't
  * push a loaded entry out of reach (see entries-merge.ts).
  */
-export function useEntriesLog(api: ApiClient, scopeKey: string, initial: EntriesPageDto, pollMs: number) {
-  const [older, setOlder] = useState<OlderEntries | null>(null);
+export function useEntriesLog(
+  api: ApiClient,
+  scope: { key: string; operatorId?: string },
+  initial: EntriesPageDto,
+  pollMs: number,
+) {
+  const { key: scopeKey, operatorId } = scope;
+  // Older pages belong to the scope they were loaded in: changing operator or toggling "everyone" starts over.
+  const [olderState, setOlderState] = useState<{ scopeKey: string; block: OlderEntries | null }>({ scopeKey, block: null });
+  const older = olderState.scopeKey === scopeKey ? olderState.block : null;
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<ApiClientError | null>(null);
   const limit = useRef(PAGE_SIZE);
 
   const head = useQuery({
     queryKey: ["entries", scopeKey],
-    queryFn: () => api.getEntries({ limit: limit.current }),
+    queryFn: () => api.getEntries({ limit: limit.current, operatorId }),
     initialData: initial,
     staleTime: 1_000,
     refetchInterval: pollInterval(pollMs),
@@ -130,15 +138,18 @@ export function useEntriesLog(api: ApiClient, scopeKey: string, initial: Entries
     setLoadingMore(true);
     setLoadError(null);
     try {
-      const page = await api.getEntries({ limit: PAGE_SIZE, cursor });
+      const page = await api.getEntries({ limit: PAGE_SIZE, cursor, operatorId });
       // If new entries outran the poll the old block is stale (merged.valid is false): start a fresh one.
-      setOlder((previous) => appendOlder(merged.valid ? previous : null, page, cursor));
+      setOlderState((previous) => ({
+        scopeKey,
+        block: appendOlder(merged.valid && previous.scopeKey === scopeKey ? previous.block : null, page, cursor),
+      }));
     } catch (err) {
       setLoadError(err instanceof ApiClientError ? err : new ApiClientError(0, "NETWORK", "Couldn't load more.", true));
     } finally {
       setLoadingMore(false);
     }
-  }, [api, merged.nextCursor, merged.valid, loadingMore]);
+  }, [api, merged.nextCursor, merged.valid, loadingMore, scopeKey, operatorId]);
 
   return {
     entries: merged.entries,
