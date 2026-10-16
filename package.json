@@ -19,7 +19,8 @@
     "ui:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ui-check.mjs",
     "test:count": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test-count.mjs",
     "prepare": "git config core.hooksPath .githooks || true",
-    "docs:screenshots": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/screenshots.mjs"
+    "docs:screenshots": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/screenshots.mjs",
+    "demo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/demo.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",
