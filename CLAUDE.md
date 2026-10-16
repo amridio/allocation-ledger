@@ -40,6 +40,7 @@ Stack: Next.js (App Router), TypeScript, Prisma, Postgres (Docker), TanStack Que
 - Sizes are written as explicit pixels, not rem (the root font is 18px): buttons and inputs at least 56px tall (48px is the floor), the metric number 72px, text 16px or larger. Colours come only from the tokens in `globals.css`; `src/ui/palette.test.ts` enforces 7:1 against the real tokens, so change a token and the test tells you.
 - The screen is rendered on the server (`instant = false`, no Suspense) so first open has no loading state; the page gets its data through `loadDashboard()` and the shared `src/server/queries/*`, never its own queries. Times are formatted in the fixed `APP_TIMEZONE`, never the device's.
 - After a write the screen replaces its optimistic number with the `metric` the server returned; it never adds to a number a poll may already have refreshed.
+- Optimistic rows say **Syncing…**. A server REJECTION (non-retryable) rolls back: remove the row, drop its units from the metric, show a dismissible notice with the reason. No answer (retryable) keeps a **Not sent** row with Retry, reusing the same Idempotency-Key. Never offer Retry for a rejection.
 - UI changes are verified with `npm run ui:check` (real Chromium, phone and desktop), not only by reading code. Run `npm run build` first, and never leave `next` servers running: stale ones silently serve an old build.
 
 ## Dependencies

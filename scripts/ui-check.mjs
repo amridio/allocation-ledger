@@ -176,6 +176,23 @@ const contrastReport = (page) =>
     return out;
   })()`);
 
+/** Anything that pokes out of the card it sits in (a number crossing a border, text running off the edge). */
+const spills = (page) =>
+  page.evaluate(`(() => { ${visibleScript}
+    const out = [];
+    const cards = document.querySelectorAll('[data-testid="activity-row"], [data-testid="pending-row"], [data-testid="timeline-point"], [data-testid="metric-card"], [data-testid="notice"]');
+    for (const card of cards) {
+      if (!visible(card)) continue;
+      const box = card.getBoundingClientRect();
+      for (const el of card.querySelectorAll("*")) {
+        if (!visible(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.right > box.right + 0.5 || r.left < box.left - 0.5) out.push({ card: card.getAttribute("data-testid"), text: (el.textContent || "").trim().slice(0, 30), overBy: Math.round(Math.max(r.right - box.right, box.left - r.left)) });
+      }
+    }
+    return out;
+  })()`);
+
 const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
 
 /** Pages through the log ("Load older entries") until a row containing `text` is on screen. */
@@ -255,6 +272,11 @@ try {
     assert(overflow <= 0, `page is ${overflow}px wider than the screen`);
   });
 
+  await check("mobile: nothing spills out of its card (units, text and badges stay inside the borders)", async () => {
+    const out = await spills(m);
+    assert(out.length === 0, `${out.length} element(s) poke out of their card: ${JSON.stringify(out.slice(0, 4))}`);
+  });
+
   await check("mobile: the metric number is at least 48px (it is 72px)", async () => {
     const size = await m.locator('[data-testid="metric-value"]').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     assert(size >= 48, `metric font is ${size}px`);
@@ -317,7 +339,7 @@ try {
   await b.goto("/");
   await b.waitForSelector('[data-testid="metric-value"]');
 
-  await check("log an allocation on a phone: the number updates at once, with a pending row in words, and never flickers or double counts", async () => {
+  await check("log an allocation on a phone: the number updates at once, with a Syncing row in words, and never flickers or double counts", async () => {
     assert((await metricText(b)) === "5", "expected Ben to start at 5");
     assert((await statusWord(b)).includes("Critical"), "expected CRITICAL to start");
     // watch every value the metric ever shows
@@ -350,9 +372,9 @@ try {
     assert((await metricText(b)) === "25", `optimistic number should be 25, got ${await metricText(b)}`);
     assert((await statusWord(b)).includes("Low"), "status should already read Low");
     const pending = await b.locator('[data-testid="pending-row"]').first();
-    assert((await pending.innerText()).includes("Sending"), "pending row should say Sending…");
+    assert((await pending.innerText()).includes("Syncing"), "pending row should say Syncing…");
     assert((await pending.evaluate((el) => getComputedStyle(el).borderStyle)) === "dashed", "pending row should have a dashed border");
-    assert((await b.locator('[data-testid="metric-pending"]').innerText()).includes("still sending"), "metric should say it includes units still sending");
+    assert((await b.locator('[data-testid="metric-pending"]').innerText()).includes("still syncing"), "metric should say it includes units still syncing");
     await shot(b, "05-mobile-pending");
 
     release();
@@ -401,6 +423,46 @@ try {
     assert(rows.n === 3 && rows.s === 32, `database holds ${JSON.stringify(rows)} (a duplicate would show 4 rows / 39 units)`);
     await b.unroute("**/api/entries");
   });
+
+  await check("a REJECTED allocation rolls back: the row and the number go away and an error says why (no retry offered)", async () => {
+    assert((await metricText(b)) === "32", `expected Ben at 32, got ${await metricText(b)}`);
+    const rowsBefore = await b.locator('[data-testid="activity-row"]').count();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    await b.route("**/api/entries", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await gate; // hold it so the optimistic state can be seen, then let the REAL server answer (it will refuse: pool capacity is 500)
+      await route.continue();
+    });
+    await b.locator('[data-testid="open-log-sheet"]').tap();
+    await b.locator('[data-testid="log-sheet"] [data-testid="units-input"]').fill("600");
+    await b.locator('[data-testid="log-sheet"] [data-testid="submit-allocation"]').tap();
+
+    await b.waitForSelector('[data-testid="pending-row"]');
+    assert((await b.locator('[data-testid="pending-row"]').first().innerText()).includes("Syncing"), "should say Syncing while waiting");
+    assert((await metricText(b)) === "632", `optimistic number should be 632, got ${await metricText(b)}`);
+    assert((await statusWord(b)).includes("High"), "optimistic status should be High");
+
+    release();
+    await b.waitForSelector('[data-testid="pending-row"]', { state: "detached" });
+    await b.waitForSelector('[data-testid="notice"]');
+    assert((await metricText(b)) === "32", `the number must roll back to 32, got ${await metricText(b)}`);
+    assert((await statusWord(b)).includes("Low"), "the status must roll back to Low");
+    const notice = await b.locator('[data-testid="notice"]').first().innerText();
+    assert(notice.includes("600") && /full|capacity|room/i.test(notice), `the error should say what happened, got: ${notice}`);
+    assert((await b.locator('[data-testid="notice"] [data-testid="retry-button"]').count()) === 0, "a rejection must not offer Retry");
+    assert((await b.locator('[data-testid="activity-row"]').count()) === rowsBefore, "no new row should remain in the log");
+    assert((await b.locator('[data-testid="metric-pending"]').count()) === 0, "the 'still syncing' note should be gone");
+    const dbRows = await pool_query(`SELECT count(*)::int AS n, coalesce(sum(units),0)::int AS s FROM ledger_entry WHERE operator_id = $1`, [id("ben")]);
+    assert(dbRows.n === 3 && dbRows.s === 32, `the database must be unchanged, got ${JSON.stringify(dbRows)}`);
+    await b.screenshot({ path: path.join(SHOTS, "13-mobile-rolled-back.png") });
+    const dismiss = b.locator('[data-testid="notice"] [data-testid="dismiss-notice"]').first();
+    const box = await dismiss.boundingBox();
+    assert(box && box.height >= 48, `Dismiss button is ${box?.height}px tall`);
+    await dismiss.tap();
+    await b.waitForSelector('[data-testid="notice"]', { state: "detached" });
+    await b.unroute("**/api/entries");
+  });
   await benCtx.close();
 
   // ======================================================== desktop, operator
@@ -421,6 +483,10 @@ try {
     assert(timeline.y > metric.y, "the history should be below the metric");
     assert(Math.abs(form.y - metric.y) < 8 && Math.abs(metric.y - log.y) < 8, "the three columns should start on the same row");
     assert(!(await d.locator('[data-testid="action-bar"]').isVisible()), "the mobile action bar should be hidden on desktop");
+  });
+  await check("desktop: nothing spills out of its card", async () => {
+    const out = await spills(d);
+    assert(out.length === 0, `${out.length} element(s) poke out of their card: ${JSON.stringify(out.slice(0, 4))}`);
   });
   await check("desktop: controls are at least 48px tall and all text has 7:1 contrast", async () => {
     const small = (await controls(d)).filter((c) => c.h < 48);

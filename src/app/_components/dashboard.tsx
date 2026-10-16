@@ -26,6 +26,7 @@ import { AppHeader } from "./app-header";
 import { LogAllocationForm } from "./log-allocation-form";
 import { LogAllocationSheet } from "./log-allocation-sheet";
 import { MetricCard } from "./metric-card";
+import { NoticeList } from "./notice-list";
 import { OperatorPicker } from "./operator-picker";
 import { Providers } from "./providers";
 import { StatusTimeline } from "./status-timeline";
@@ -50,6 +51,8 @@ function allocationMessage(e: ApiClientError): string {
       return "No connection, so this wasn't confirmed. Retry: it won't be counted twice.";
     case "BUSY":
       return "The system is busy. Retry: it won't be counted twice.";
+    case "UNAUTHENTICATED":
+      return "You are signed out. Switch user and log it again.";
     default:
       return e.message;
   }
@@ -132,7 +135,10 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
             await sleep((e.retryAfterSeconds ?? 1) * 1000);
             continue;
           }
-          dispatch({ type: "failed", key, error: { code: e.code, message: allocationMessage(e) } });
+          const error = { code: e.code, message: allocationMessage(e) };
+          // No answer (offline, busy): the entry may be fine, so keep the row with a Retry (same key).
+          // A REJECTION (pool full, not allowed...) can't be fixed by retrying: roll everything back and say why.
+          dispatch(e.retryable ? { type: "failed", key, error } : { type: "rolledBack", key, error });
           return;
         }
         await confirmAllocation(key, result);
@@ -199,6 +205,7 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   return (
     <div className="mx-auto w-full max-w-[1400px] p-4 pb-40 lg:p-8 lg:pb-8">
       <AppHeader name={user.name} role={user.role} switcherEnabled={config.switcherEnabled} />
+      <NoticeList notices={outbox.notices} onDismiss={(key) => dispatch({ type: "dismissNotice", key })} />
       <div className="sr-only" aria-live="polite" data-testid="announcer">
         {track.changed.size > 0 ? `${track.changed.size} status history ${track.changed.size === 1 ? "point was" : "points were"} recalculated.` : ""}
       </div>

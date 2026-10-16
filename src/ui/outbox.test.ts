@@ -11,8 +11,9 @@ const run = (actions: Parameters<typeof outboxReducer>[1][], start: OutboxState 
  * so retrying after a timeout can't double count.
  */
 describe("outboxReducer", () => {
-  it("starts empty with nothing pending", () => {
+  it("starts empty with nothing pending and no notices", () => {
     expect(initialOutbox.items).toEqual([]);
+    expect(initialOutbox.notices).toEqual([]);
     expect(pendingUnits(initialOutbox)).toEqual([]);
   });
 
@@ -90,5 +91,71 @@ describe("outboxReducer", () => {
   it("actions for an unknown key change nothing", () => {
     const s = run([{ type: "add", key: "a", units: 5 }]);
     expect(run([{ type: "sent", key: "zzz" }, { type: "failed", key: "zzz", error }, { type: "retry", key: "zzz" }], s)).toEqual(s);
+  });
+});
+
+/*
+ * Two different bad outcomes:
+ *   failed     = we couldn't get an answer (no connection, busy). The entry may still be valid, so the
+ *                row stays as "Not sent" with a Retry button (same key).
+ *   rolledBack = the server REJECTED it (pool full, not allowed...). Retrying can't help, so the
+ *                optimistic row is removed, the metric goes back, and a notice says why.
+ */
+describe("rolledBack", () => {
+  const rejection = { code: "CAPACITY_EXCEEDED", message: "The pool is full." };
+
+  it("removes the optimistic item, so its units stop counting (the metric rolls back)", () => {
+    const s = run([
+      { type: "add", key: "a", units: 20 },
+      { type: "add", key: "b", units: 5 },
+      { type: "rolledBack", key: "a", error: rejection },
+    ]);
+    expect(s.items.map((i) => i.key)).toEqual(["b"]);
+    expect(pendingUnits(s)).toEqual([5]);
+  });
+
+  it("records a notice with the units and the reason", () => {
+    const s = run([
+      { type: "add", key: "a", units: 20 },
+      { type: "rolledBack", key: "a", error: rejection },
+    ]);
+    expect(s.notices).toEqual([{ key: "a", units: 20, code: "CAPACITY_EXCEEDED", message: "The pool is full." }]);
+  });
+
+  it("can roll back an item that had already failed once (e.g. a retry that was then rejected)", () => {
+    const s = run([
+      { type: "add", key: "a", units: 20 },
+      { type: "failed", key: "a", error: { code: "NETWORK", message: "No connection." } },
+      { type: "retry", key: "a" },
+      { type: "rolledBack", key: "a", error: rejection },
+    ]);
+    expect(s.items).toEqual([]);
+    expect(s.notices).toHaveLength(1);
+  });
+
+  it("newest notice first; dismissNotice removes just that one", () => {
+    const s = run([
+      { type: "add", key: "a", units: 1 },
+      { type: "add", key: "b", units: 2 },
+      { type: "rolledBack", key: "a", error: rejection },
+      { type: "rolledBack", key: "b", error: rejection },
+    ]);
+    expect(s.notices.map((n) => n.key)).toEqual(["b", "a"]);
+    expect(run([{ type: "dismissNotice", key: "b" }], s).notices.map((n) => n.key)).toEqual(["a"]);
+  });
+
+  it("an unknown key changes nothing", () => {
+    const s = run([{ type: "add", key: "a", units: 1 }]);
+    expect(run([{ type: "rolledBack", key: "zzz", error: rejection }, { type: "dismissNotice", key: "zzz" }], s)).toEqual(s);
+  });
+
+  it("a rolled-back item is gone for good: a later 'sent' or 'retry' for its key does nothing", () => {
+    const s = run([
+      { type: "add", key: "a", units: 1 },
+      { type: "rolledBack", key: "a", error: rejection },
+      { type: "retry", key: "a" },
+      { type: "sent", key: "a" },
+    ]);
+    expect(s.items).toEqual([]);
   });
 });

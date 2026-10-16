@@ -81,11 +81,11 @@ function PendingRow({ item, onRetry, onDismiss }: { item: OutboxItem; onRetry: (
       className={`rounded-xl border-4 border-dashed p-4 ${failed ? "border-danger bg-danger-bg" : "border-ink bg-pending-bg"}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className={`flex items-center gap-2 text-lg font-bold ${failed ? "text-danger" : ""}`}>
+        <p className={`flex min-w-0 flex-wrap items-center gap-2 text-lg font-bold ${failed ? "text-danger" : ""}`}>
           {failed ? <AlertIcon /> : <HourglassIcon />}
-          {failed ? "Not sent" : "Sending…"}
+          {failed ? "Not sent" : "Syncing…"}
         </p>
-        <p className="text-3xl font-extrabold tabular-nums">{formatSigned(item.units)}</p>
+        <p className="shrink-0 text-3xl font-extrabold tabular-nums">{formatSigned(item.units)}</p>
       </div>
       {failed && item.error && <p className="mt-1 text-lg font-bold text-danger">{item.error.message}</p>}
       {failed && (
@@ -116,12 +116,12 @@ function EntryRow({ entry, namesById, now, timeZone, canAdjust, onAdjust }: { en
       className="rounded-xl border-4 border-border p-4"
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="flex items-center gap-2 text-lg font-bold">
+        <p className="flex min-w-0 flex-wrap items-center gap-x-2 text-lg font-bold">
           {isAdjustment ? <SlidersIcon /> : <PlusIcon />}
           {isAdjustment ? "Adjustment" : "Allocation"}
           <span className="text-base font-semibold text-ink-soft">#{entry.seq}</span>
         </p>
-        <p data-testid="row-units" className="text-3xl font-extrabold tabular-nums">
+        <p data-testid="row-units" className="shrink-0 text-3xl font-extrabold tabular-nums">
           {formatSigned(entry.units)}
         </p>
       </div>

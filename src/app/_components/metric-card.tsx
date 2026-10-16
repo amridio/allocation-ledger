@@ -46,7 +46,7 @@ export function MetricCard({
           className="mt-4 inline-flex items-center gap-2 rounded-lg border-4 border-dashed border-ink bg-pending-bg px-3 py-1 text-lg font-bold"
         >
           <HourglassIcon />
-          Includes {pendingCount} still sending…
+          Includes {pendingCount} still syncing…
         </p>
       )}
 
