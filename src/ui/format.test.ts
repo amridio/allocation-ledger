@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeExpiry, formatSigned, metricFontPx } from "./format";
+import { describeExpiry, firstName, formatSigned, metricFontPx } from "./format";
 
 const now = new Date("2026-03-01T12:00:00.000Z");
 const inMs = (ms: number) => new Date(now.getTime() + ms).toISOString();
@@ -58,5 +58,19 @@ describe("metricFontPx: the big number is 72px unless its digits would not fit a
       expect(metricFontPx(n)).toBeLessThanOrEqual(last);
       last = metricFontPx(n);
     }
+  });
+});
+
+describe("firstName: a label short enough for a half-width button on a 360px phone", () => {
+  it("is the first word of the name", () => {
+    expect(firstName("Ada Okafor")).toBe("Ada");
+    expect(firstName("Bartholomew Featherstonehaugh-Montgomery")).toBe("Bartholomew");
+  });
+
+  it("keeps a one-word name, ignores extra spaces, and never returns an empty label", () => {
+    expect(firstName("Madonna")).toBe("Madonna");
+    expect(firstName("  Ben   Lindqvist ")).toBe("Ben");
+    expect(firstName("")).toBe("This operator");
+    expect(firstName("   ")).toBe("This operator");
   });
 });

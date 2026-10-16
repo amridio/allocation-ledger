@@ -77,7 +77,7 @@
       "skipped": 0
     },
     "src/ui/format.test.ts": {
-      "total": 8,
+      "total": 10,
       "skipped": 0
     },
     "src/ui/idempotency.test.ts": {

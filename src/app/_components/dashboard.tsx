@@ -292,7 +292,7 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
                 ? `Everyone in ${metric.pool.name}`
                 : `${subject.name}'s allocations and corrections`
           }
-          scopeToggle={isSupervisor ? <LogScopeToggle operatorId={subject.id} logAll={logAll} /> : undefined}
+          scopeToggle={isSupervisor ? <LogScopeToggle operatorId={subject.id} operatorName={subject.name} logAll={logAll} /> : undefined}
         />
       </div>
 

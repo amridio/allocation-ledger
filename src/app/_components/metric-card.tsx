@@ -69,9 +69,9 @@ export function MetricCard({
               aria-valuemin={0}
               aria-valuemax={pool.capacity}
               aria-valuenow={pool.activeUnits}
-              className="mt-2 h-6 w-full overflow-hidden rounded-full border-4 border-ink"
+              className="mt-2 h-8 w-full overflow-hidden rounded-full border-4 border-ink bg-pending-bg p-[3px]"
             >
-              <div className="h-full bg-ink" style={{ width: `${percent}%` }} />
+              <div className="h-full rounded-full bg-ink" style={{ width: `${percent}%` }} />
             </div>
           </>
         )}

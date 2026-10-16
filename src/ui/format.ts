@@ -44,3 +44,8 @@ export function metricFontPx(units: number): number {
   if (digits === 7) return 52;
   return 48;
 }
+
+/** The first word of a name, for narrow labels (the full name stays in the aria-label). */
+export function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || "This operator";
+}
