@@ -17,6 +17,8 @@ npm run dev
 
 Checks: `npm run typecheck`, `npm run lint`, `npm test` (fast unit tests, no database needed).
 
+**Lost tests.** `npm run test:count` runs both suites and compares the number of tests per file with the counts committed in `test-counts.json` (the last commit's version is the "before"). It fails if a file lost tests, a file disappeared, tests were turned into `.skip`, or the baseline is stale. The pre-commit hook in `.githooks/` runs it (`npm install` points git at it: `git config core.hooksPath .githooks`); a commit with no code staged skips it. After adding tests run `npm run test:count -- --update` and stage `test-counts.json`. A deliberate removal needs `ALLOW_TEST_REMOVAL=1 git commit` on top of the updated baseline, so the diff of `test-counts.json` records it. `SKIP_INT_COUNT=1` skips the integration suite (it needs Docker Postgres) and says so. A count can't tell which test a rename replaced; it catches deletions, not swaps.
+
 Integration tests run against real Postgres, in a separate database (`TEST_DATABASE_URL`, `ops_test` by default, created by the Docker init script and migrated automatically): `npm run test:int`. They never touch the dev database, and a guard refuses to run unless the database name ends in `_test` and differs from `DATABASE_URL`. The ledger is append-only, so these tests can't clean up after themselves. Each test creates its own pool, tier and operator, and `ops_test` just grows. To reset everything: `docker compose down -v && docker compose up -d --wait` (this also recreates the dev database; re-run `npm run db:deploy && npm run db:seed:demo`). `src/server/concurrency.int.test.ts` holds the money-critical guarantees (50 parallel allocations, overflow attempts on a full pool, repeated idempotency keys, two supervisors adjusting one entry); run it repeatedly after touching the write path.
 
 ### Database connection pool
@@ -153,6 +155,10 @@ The "session" is a cookie `uid` holding a user id. `POST /api/switch-user` `{ "u
 | `POST /api/switch-user` `{ userId }` | anyone | Temporary login, see above. 404 unless `ENABLE_USER_SWITCHER=true`. |
 
 How the writes stay correct under simultaneous requests: see `allocate()` in [`src/server/allocate.ts`](./src/server/allocate.ts) and `adjust()` in [`src/server/adjust.ts`](./src/server/adjust.ts). In short, one READ COMMITTED transaction locks the pool row, then checks the idempotency key (after the lock, so it sees the previous holder's commit, and before the capacity check, so a replay is never refused for lack of space), then checks capacity, then inserts and increments the balance. The unique index on `(created_by_id, idempotency_key)` is the backstop.
+
+## Trade-offs
+
+- **Polling is paused while the user's own write is in flight.** That avoids counting a write twice (a poll that lands between the server's commit and its answer already includes it), but it also means the screen doesn't refresh for those few moments. The proper fix is to reconcile by `seq`: ignore any server data older than the last confirmed write. That also fits the SSE upgrade later, where pushed events carry a `seq` too.
 
 ## Next steps
 

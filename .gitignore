@@ -45,3 +45,4 @@ next-env.d.ts
 
 # output of npm run ui:check
 /ui-check-output
+.vitest/

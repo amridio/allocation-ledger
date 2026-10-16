@@ -1,0 +1,126 @@
+{
+  "unit": {
+    "src/domain/adjustment.test.ts": {
+      "total": 37,
+      "skipped": 0
+    },
+    "src/domain/allocation.test.ts": {
+      "total": 30,
+      "skipped": 0
+    },
+    "src/domain/expiry.test.ts": {
+      "total": 5,
+      "skipped": 0
+    },
+    "src/domain/ledger.test.ts": {
+      "total": 42,
+      "skipped": 0
+    },
+    "src/domain/metric.test.ts": {
+      "total": 12,
+      "skipped": 0
+    },
+    "src/domain/queries.test.ts": {
+      "total": 16,
+      "skipped": 0
+    },
+    "src/domain/status.test.ts": {
+      "total": 10,
+      "skipped": 0
+    },
+    "src/server/api/access-coverage.test.ts": {
+      "total": 8,
+      "skipped": 0
+    },
+    "src/server/api/access.test.ts": {
+      "total": 7,
+      "skipped": 0
+    },
+    "src/server/api/auth.test.ts": {
+      "total": 14,
+      "skipped": 0
+    },
+    "src/server/api/errors.test.ts": {
+      "total": 28,
+      "skipped": 0
+    },
+    "src/server/api/request.test.ts": {
+      "total": 8,
+      "skipped": 0
+    },
+    "src/server/pool-size.test.ts": {
+      "total": 12,
+      "skipped": 0
+    },
+    "src/server/testing/test-db-guard.test.ts": {
+      "total": 5,
+      "skipped": 0
+    },
+    "src/tooling/test-counts.test.ts": {
+      "total": 10,
+      "skipped": 0
+    },
+    "src/ui/api-client.test.ts": {
+      "total": 17,
+      "skipped": 0
+    },
+    "src/ui/contrast.test.ts": {
+      "total": 5,
+      "skipped": 0
+    },
+    "src/ui/entries-merge.test.ts": {
+      "total": 14,
+      "skipped": 0
+    },
+    "src/ui/entries-scope.test.ts": {
+      "total": 7,
+      "skipped": 0
+    },
+    "src/ui/format.test.ts": {
+      "total": 8,
+      "skipped": 0
+    },
+    "src/ui/idempotency.test.ts": {
+      "total": 3,
+      "skipped": 0
+    },
+    "src/ui/outbox.test.ts": {
+      "total": 15,
+      "skipped": 0
+    },
+    "src/ui/palette.test.ts": {
+      "total": 10,
+      "skipped": 0
+    },
+    "src/ui/time.test.ts": {
+      "total": 4,
+      "skipped": 0
+    },
+    "src/ui/timeline-diff.test.ts": {
+      "total": 6,
+      "skipped": 0
+    }
+  },
+  "int": {
+    "src/server/adjust.int.test.ts": {
+      "total": 31,
+      "skipped": 0
+    },
+    "src/server/allocate.int.test.ts": {
+      "total": 20,
+      "skipped": 0
+    },
+    "src/server/api/routes.int.test.ts": {
+      "total": 64,
+      "skipped": 0
+    },
+    "src/server/concurrency.int.test.ts": {
+      "total": 20,
+      "skipped": 0
+    },
+    "src/server/dashboard.int.test.ts": {
+      "total": 11,
+      "skipped": 0
+    }
+  }
+}

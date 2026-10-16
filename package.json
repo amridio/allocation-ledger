@@ -16,7 +16,9 @@
     "db:seed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed.mjs",
     "db:seed:demo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed.mjs --demo",
     "test:int": "vitest run --config vitest.int.config.ts",
-    "ui:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ui-check.mjs"
+    "ui:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/ui-check.mjs",
+    "test:count": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/test-count.mjs",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",
