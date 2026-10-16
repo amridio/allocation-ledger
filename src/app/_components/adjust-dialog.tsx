@@ -64,6 +64,7 @@ export function AdjustDialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const keyRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const inFlight = useRef(false);
   const [direction, setDirection] = useState<"remove" | "add">("remove");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -81,6 +82,7 @@ export function AdjustDialog({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (inFlight.current) return; // a double tap while saving: the first request is still the one that counts
     if (units === null || trimmedReason === "") {
       setShowErrors(true);
       return;
@@ -89,6 +91,7 @@ export function AdjustDialog({
     const fingerprint = JSON.stringify(body);
     if (keyRef.current?.fingerprint !== fingerprint) keyRef.current = { fingerprint, key: newIdempotencyKey() };
 
+    inFlight.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -97,6 +100,7 @@ export function AdjustDialog({
     } catch (err) {
       setError(err instanceof ApiClientError ? err : new ApiClientError(0, "NETWORK", "Couldn't save.", true));
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
   }
@@ -110,9 +114,9 @@ export function AdjustDialog({
       onClose={onClose}
       aria-labelledby="adjust-title"
       data-testid="adjust-dialog"
-      className="fixed inset-x-0 bottom-0 top-auto m-0 max-h-[94dvh] w-full max-w-none overflow-auto rounded-t-3xl border-4 border-ink bg-page p-5 text-ink backdrop:bg-black/70 lg:inset-auto lg:left-1/2 lg:top-1/2 lg:w-[34rem] lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-3xl"
+      className="fixed inset-x-0 bottom-0 top-auto m-0 max-h-[94dvh] w-full max-w-none overflow-auto rounded-t-3xl border-4 border-ink bg-page p-0 text-ink backdrop:bg-black/70 lg:inset-auto lg:left-1/2 lg:top-1/2 lg:w-[34rem] lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-3xl"
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex items-center justify-between gap-3 px-5 pt-5">
         <h2 id="adjust-title" className={HEADING}>
           Adjust entry #{target.seq}
         </h2>
@@ -120,75 +124,78 @@ export function AdjustDialog({
           <CloseIcon />
         </button>
       </div>
-      <p className="mb-4 text-lg font-bold" data-testid="adjust-summary">
+      <p className="mb-4 px-5 text-lg font-bold" data-testid="adjust-summary">
         {operatorName} · {formatSigned(target.units)} units · {formatWhen(target.effectiveAt, now, timeZone)}
       </p>
 
       <form noValidate onSubmit={submit}>
-        <fieldset className="mb-4">
-          <legend className={LABEL}>What do you want to do?</legend>
-          <div className="flex gap-3">
-            <button type="button" data-testid="adjust-remove" aria-pressed={direction === "remove"} onClick={() => setDirection("remove")} className={segment(direction === "remove")}>
-              <MinusIcon /> Remove units
-            </button>
-            <button type="button" data-testid="adjust-add" aria-pressed={direction === "add"} onClick={() => setDirection("add")} className={segment(direction === "add")}>
-              <PlusIcon /> Add units
-            </button>
-          </div>
-        </fieldset>
+        <div className="px-5">
+          <fieldset className="mb-4 min-w-0">
+            <legend className={LABEL}>What do you want to do?</legend>
+            <div className="flex gap-3">
+              <button type="button" data-testid="adjust-remove" aria-pressed={direction === "remove"} onClick={() => setDirection("remove")} className={segment(direction === "remove")}>
+                <MinusIcon /> Remove units
+              </button>
+              <button type="button" data-testid="adjust-add" aria-pressed={direction === "add"} onClick={() => setDirection("add")} className={segment(direction === "add")}>
+                <PlusIcon /> Add units
+              </button>
+            </div>
+          </fieldset>
 
-        <label htmlFor="adjust-amount" className={LABEL}>
-          Number of units
-        </label>
-        <input
-          id="adjust-amount"
-          data-testid="adjust-amount"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          autoComplete="off"
-          value={amount}
-          onChange={(e) => {
-            setAmount(e.target.value.replace(/\D/g, "").slice(0, 7));
-            setError(null);
-          }}
-          aria-invalid={showErrors && units === null}
-          className={INPUT}
-        />
-        {showErrors && units === null && (
-          <p role="alert" className="mt-2 text-lg font-bold text-danger">
-            Enter a whole number of 1 or more.
-          </p>
-        )}
+          <label htmlFor="adjust-amount" className={LABEL}>
+            Number of units
+          </label>
+          <input
+            id="adjust-amount"
+            data-testid="adjust-amount"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            autoComplete="off"
+            value={amount}
+            onChange={(e) => {
+              setAmount(e.target.value.replace(/\D/g, "").slice(0, 7));
+              setError(null);
+            }}
+            aria-invalid={showErrors && units === null}
+            className={INPUT}
+          />
+          {showErrors && units === null && (
+            <p role="alert" className="mt-2 text-lg font-bold text-danger">
+              Enter a whole number of 1 or more.
+            </p>
+          )}
 
-        <label htmlFor="adjust-reason" className={`${LABEL} mt-4`}>
-          Reason (required)
-        </label>
-        <textarea
-          id="adjust-reason"
-          data-testid="adjust-reason"
-          rows={3}
-          maxLength={500}
-          value={reason}
-          onChange={(e) => {
-            setReason(e.target.value);
-            setError(null);
-          }}
-          aria-invalid={showErrors && trimmedReason === ""}
-          className="min-h-[120px] w-full rounded-xl border-4 border-ink bg-page p-4 text-xl text-ink"
-        />
-        {showErrors && trimmedReason === "" && (
-          <p role="alert" className="mt-2 text-lg font-bold text-danger">
-            Say why you are changing this entry.
-          </p>
-        )}
+          <label htmlFor="adjust-reason" className={`${LABEL} mt-4`}>
+            Reason (required)
+          </label>
+          <textarea
+            id="adjust-reason"
+            data-testid="adjust-reason"
+            rows={3}
+            maxLength={500}
+            value={reason}
+            onChange={(e) => {
+              setReason(e.target.value);
+              setError(null);
+            }}
+            aria-invalid={showErrors && trimmedReason === ""}
+            className="min-h-[120px] w-full rounded-xl border-4 border-ink bg-page p-4 text-xl text-ink"
+          />
+          {showErrors && trimmedReason === "" && (
+            <p role="alert" className="mt-2 text-lg font-bold text-danger">
+              Say why you are changing this entry.
+            </p>
+          )}
 
-        {error && (
-          <div className="mt-4">
-            <InlineAlert testId="adjust-error">{messageFor(error)}</InlineAlert>
-          </div>
-        )}
+          {error && (
+            <div className="mt-4">
+              <InlineAlert testId="adjust-error">{messageFor(error)}</InlineAlert>
+            </div>
+          )}
 
-        <div className="mt-5 grid grid-cols-2 gap-3">
+        </div>
+        {/* Pinned to the bottom of the sheet: on a short phone the form scrolls, the buttons never leave thumb reach. */}
+        <div className="sticky bottom-0 mt-5 grid grid-cols-2 gap-3 border-t-4 border-border bg-page p-5">
           <button type="button" data-testid="adjust-cancel" onClick={onClose} className={BTN_SECONDARY}>
             Cancel
           </button>

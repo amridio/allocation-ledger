@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeExpiry, formatSigned } from "./format";
+import { describeExpiry, formatSigned, metricFontPx } from "./format";
 
 const now = new Date("2026-03-01T12:00:00.000Z");
 const inMs = (ms: number) => new Date(now.getTime() + ms).toISOString();
@@ -37,5 +37,26 @@ describe("formatSigned", () => {
     expect(formatSigned(25)).toBe("+25");
     expect(formatSigned(-5)).toBe("−5");
     expect(formatSigned(0)).toBe("0");
+  });
+});
+
+describe("metricFontPx: the big number is 72px unless its digits would not fit a 360px phone", () => {
+  it("is the 72px design size for up to 5 digits", () => {
+    for (const n of [0, 7, 125, 99_999]) expect(metricFontPx(n)).toBe(72);
+  });
+
+  it("steps down so every digit stays in the card, and never below 48px", () => {
+    expect(metricFontPx(100_000)).toBe(60); // 6 digits
+    expect(metricFontPx(1_234_567)).toBe(52); // 7 digits
+    expect(metricFontPx(12_345_678)).toBe(48);
+    expect(metricFontPx(9_999_999_999)).toBe(48);
+  });
+
+  it("never grows as the number grows", () => {
+    let last = Infinity;
+    for (const n of [1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9]) {
+      expect(metricFontPx(n)).toBeLessThanOrEqual(last);
+      last = metricFontPx(n);
+    }
   });
 });

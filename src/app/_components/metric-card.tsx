@@ -1,5 +1,6 @@
 import type { MetricDto } from "@/domain/wire";
 import type { StatusLevel } from "@/domain/status-config";
+import { metricFontPx } from "@/ui/format";
 import { CARD } from "@/ui/styles";
 import { ClockIcon, HourglassIcon } from "./icons";
 import { StatusBadge } from "./status-badge";
@@ -35,7 +36,8 @@ export function MetricCard({
       <p
         data-testid="metric-value"
         aria-live="polite"
-        className="my-3 text-[72px] font-extrabold leading-none tabular-nums"
+        style={{ fontSize: metricFontPx(activeUnits) }}
+        className="my-3 font-extrabold leading-none tabular-nums"
       >
         {activeUnits}
       </p>

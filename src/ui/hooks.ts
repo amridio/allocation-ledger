@@ -53,10 +53,17 @@ export function useServerClock(asOf: string) {
   };
 }
 
-export function useMetric(api: ApiClient, subjectId: string, initial: MetricDto, pollMs: number) {
+/**
+ * `paused` while one of the user's own writes is in flight: the screen adds the unconfirmed units to the
+ * number it holds, so a poll that landed AFTER the server committed but BEFORE the answer arrived
+ * would count them twice (and show the entry as a real row next to its Syncing row). The write's
+ * answer carries the authoritative metric, and polling resumes right after it.
+ */
+export function useMetric(api: ApiClient, subjectId: string, initial: MetricDto, pollMs: number, paused = false) {
   return useQuery({
     queryKey: ["metric", subjectId],
     queryFn: () => api.getMetric(subjectId),
+    enabled: !paused,
     initialData: initial,
     staleTime: 1_000,
     refetchInterval: pollInterval(pollMs),
@@ -108,6 +115,8 @@ export function useEntriesLog(
   scope: { key: string; operatorId?: string },
   initial: EntriesPageDto,
   pollMs: number,
+  /** See useMetric: no polling while the user's own write is in flight. */
+  paused = false,
 ) {
   const { key: scopeKey, operatorId } = scope;
   // Older pages belong to the scope they were loaded in: changing operator or toggling "everyone" starts over.
@@ -120,6 +129,7 @@ export function useEntriesLog(
   const head = useQuery({
     queryKey: ["entries", scopeKey],
     queryFn: () => api.getEntries({ limit: limit.current, operatorId }),
+    enabled: !paused,
     initialData: initial,
     staleTime: 1_000,
     refetchInterval: pollInterval(pollMs),

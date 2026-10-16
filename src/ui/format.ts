@@ -32,3 +32,15 @@ export function formatSigned(n: number): string {
   if (n < 0) return `−${Math.abs(n)}`;
   return "0";
 }
+
+/**
+ * Font size of the headline number. 72px is the design size; with 6 or more digits it would run out of
+ * the card on a 360px phone, so it steps down (never below 48px).
+ */
+export function metricFontPx(units: number): number {
+  const digits = String(Math.abs(Math.trunc(units))).length;
+  if (digits <= 5) return 72;
+  if (digits === 6) return 60;
+  if (digits === 7) return 52;
+  return 48;
+}

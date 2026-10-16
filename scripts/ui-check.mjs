@@ -95,7 +95,7 @@ const id = (name) => `${name}_${RUN}`;
 async function seed() {
   const q = (sql, params) => db.query(sql, params);
   await q(`INSERT INTO tier (id, name, expiry_minutes) VALUES ($1, $1, 1440)`, [id("tier")]);
-  for (const [pool, cap] of [["main", 500], ["zed", 500], ["far", 500]]) {
+  for (const [pool, cap] of [["main", 500], ["zed", 500], ["far", 500], ["big", null]]) {
     await q(`INSERT INTO pool (id, name, capacity, updated_at) VALUES ($1, $2, $3, now())`, [id(`pool_${pool}`), `Site ${pool.toUpperCase()} ${RUN}`, cap]);
   }
   const person = (key, name, role, pool) =>
@@ -106,6 +106,7 @@ async function seed() {
   await person("eli", "Eli Park", "SUPERVISOR", "main");
   await person("zed", "Zed Quinn", "OPERATOR", "zed");
   await person("far", "Far Away", "OPERATOR", "far");
+  await person("big", "Bartholomew Featherstonehaugh-Montgomery", "OPERATOR", "big"); // a long name and a huge number, for the narrowest phone
 
   let n = 0;
   const entry = async (op, pool, units, effectiveMs, expiresMs) => {
@@ -131,6 +132,7 @@ async function seed() {
   for (let i = 0; i < 25; i++) await entry("cy", "main", 1, now - (40 + i) * 60_000, null);
   // the other site
   await entry("far", "far", 777, now - HOUR, null);
+  await entry("big", "big", 1234567, now - HOUR, null); // 7 digits: the most the form allows
 }
 
 // ---------------------------------------------------------------- browser helpers
@@ -155,7 +157,7 @@ const controls = (page) =>
   page.evaluate(`(() => { ${visibleScript}
     return [...document.querySelectorAll("button, a[href], select, input:not([type=hidden]), textarea, summary")]
       .filter(visible)
-      .map((el) => { const r = el.getBoundingClientRect(); return { tag: el.tagName.toLowerCase(), label: (el.getAttribute("aria-label") || el.textContent || el.id || "").trim().slice(0, 40), h: Math.round(r.height), w: Math.round(r.width) }; });
+      .map((el) => { const r = el.getBoundingClientRect(); return { tag: el.tagName.toLowerCase(), label: (el.getAttribute("aria-label") || el.textContent || el.id || "").trim().slice(0, 40), h: Math.round(r.height), w: Math.round(r.width), x: Math.round(r.left) }; });
   })()`);
 
 /** Contrast of every piece of visible text against its real background. */
@@ -189,6 +191,8 @@ const spills = (page) =>
       for (const el of card.querySelectorAll("*")) {
         if (!visible(el)) continue;
         const r = el.getBoundingClientRect();
+        // a block whose own text runs past its edge has a box that still looks fine: compare content width too
+        if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX === "visible") out.push({ card: card.getAttribute("data-testid"), text: (el.textContent || "").trim().slice(0, 30), overBy: el.scrollWidth - el.clientWidth, kind: "text overflow" });
         if (r.right > box.right + 0.5 || r.left < box.left - 0.5) out.push({ card: card.getAttribute("data-testid"), text: (el.textContent || "").trim().slice(0, 30), overBy: Math.round(Math.max(r.right - box.right, box.left - r.left)) });
       }
     }
@@ -223,10 +227,10 @@ const slow = await startServer(3121, { ENABLE_USER_SWITCHER: "true", UI_POLL_MS:
 const off = await startServer(3122, { ENABLE_USER_SWITCHER: "false", UI_POLL_MS: "3000" });
 
 const browser = await chromium.launch({ executablePath: findChromium(), args: ["--no-sandbox"] });
-const newContext = (base, kind, userKey) =>
+const newContext = (base, kind, userKey, phoneWidth = 390) =>
   browser.newContext({
     baseURL: base,
-    viewport: kind === "mobile" ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+    viewport: kind === "mobile" ? { width: phoneWidth, height: phoneWidth === 390 ? 844 : 740 } : { width: 1280, height: 900 },
     deviceScaleFactor: kind === "mobile" ? 2 : 1,
     isMobile: kind === "mobile",
     hasTouch: kind === "mobile",
@@ -467,6 +471,132 @@ try {
   });
   await benCtx.close();
 
+  // ======================================================== a slow write: polls and double taps (Cy, so Ben's numbers stay put)
+  const cyCtx = await newContext(main.base, "mobile", "cy");
+  const c = await cyCtx.newPage();
+  await c.goto("/");
+  await c.waitForSelector('[data-testid="metric-value"]');
+  const submitInSheet = async (units) => {
+    await c.locator('[data-testid="open-log-sheet"]').tap();
+    await c.waitForSelector('[data-testid="log-sheet"][open]');
+    await c.locator('[data-testid="log-sheet"] [data-testid="units-input"]').fill(String(units));
+  };
+
+  await check("a slow write: a poll that lands after the server committed but before the answer arrives must not double count or duplicate the row", async () => {
+    const base = Number(await metricText(c));
+    const rowsBefore = await c.locator('[data-testid="activity-row"]').count();
+    let committed = false;
+    let release;
+    const gate = new Promise((r) => (release = r));
+    await c.route("**/api/entries", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const answer = await route.fetch(); // the REAL server commits now...
+      committed = true;
+      await gate; // ...but the answer is held back on the slow network
+      await route.fulfill({ response: answer });
+    });
+    let metricPollsAfterCommit = 0;
+    c.on("request", (r) => {
+      if (committed && r.method() === "GET" && r.url().includes("/api/metric")) metricPollsAfterCommit += 1;
+    });
+
+    try {
+      await submitInSheet(4);
+      await c.locator('[data-testid="log-sheet"] [data-testid="submit-allocation"]').tap();
+      await c.waitForSelector('[data-testid="pending-row"]');
+      await c.waitForFunction(() => true);
+      for (let i = 0; i < 50 && !committed; i++) await sleep(100);
+      assert(committed, "the write never reached the server");
+      // ask for a refresh the way a returning tab does, and let a whole poll interval pass
+      await c.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await c.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await sleep(4_000);
+      console.log(`      metric requests made while the answer was held back: ${metricPollsAfterCommit}`);
+
+      assert((await metricText(c)) === String(base + 4), `held write must show ${base + 4}, got ${await metricText(c)} (double counted?)`);
+      assert((await c.locator('[data-testid="pending-row"]').count()) === 1, "exactly one Syncing row");
+      assert((await c.locator('[data-testid="activity-row"]').count()) === rowsBefore, "the entry must not show up as a real row AND as a Syncing row");
+
+      release();
+      await c.waitForSelector('[data-testid="pending-row"]', { state: "detached" });
+      await sleep(600);
+      assert((await metricText(c)) === String(base + 4), `after the answer: expected ${base + 4}, got ${await metricText(c)}`);
+      assert((await c.locator('[data-testid="activity-row"]').count()) === rowsBefore + 1, "exactly one new row once confirmed");
+    } finally {
+      release();
+      await c.unroute("**/api/entries");
+    }
+  });
+
+  await check("a slow write: a poll that was already in flight when the answer arrived can't erase the new row or the number", async () => {
+    const base = Number(await metricText(c));
+    const rowsBefore = await c.locator('[data-testid="activity-row"]').count();
+    // hold the GETs (they'd carry the pre-write state), then answer the write, then let the stale GETs land
+    let freeGets;
+    const getGate = new Promise((r) => (freeGets = r));
+    let held = 0;
+    await c.route(/\/api\/(metric|entries)/, async (route) => {
+      if (route.request().method() === "POST") return route.continue();
+      held += 1;
+      const answer = await route.fetch(); // read NOW (before the write is committed)
+      await getGate;
+      await route.fulfill({ response: answer });
+    });
+    try {
+      await submitInSheet(2);
+      for (let i = 0; i < 40 && held === 0; i++) await sleep(100); // a poll goes out and is held
+      assert(held > 0, "no poll was in flight");
+      await c.locator('[data-testid="log-sheet"] [data-testid="submit-allocation"]').tap();
+      await c.waitForSelector('[data-testid="pending-row"]', { state: "detached", timeout: 15_000 });
+      await c.waitForFunction((n) => document.querySelectorAll('[data-testid="activity-row"]').length === n, rowsBefore + 1);
+      freeGets(); // the stale answers land now
+      await sleep(800);
+      assert((await metricText(c)) === String(base + 2), `a stale poll overwrote the number: expected ${base + 2}, got ${await metricText(c)}`);
+      assert((await c.locator('[data-testid="activity-row"]').count()) === rowsBefore + 1, "a stale poll erased the new row from the log");
+    } finally {
+      freeGets();
+      await c.unroute(/\/api\/(metric|entries)/);
+    }
+  });
+
+  await check("double tap on Log allocation (phone): one request, one key, one row, and the sheet doesn't pop open again", async () => {
+    const posts = [];
+    await c.route("**/api/entries", (route) => {
+      if (route.request().method() === "POST") posts.push(route.request().headers()["idempotency-key"]);
+      return route.continue();
+    });
+    const before = await pool_query(`SELECT count(*)::int AS n FROM ledger_entry WHERE operator_id = $1`, [id("cy")]);
+    await submitInSheet(3);
+    await c.locator('[data-testid="log-sheet"] [data-testid="submit-allocation"]').dblclick();
+    await sleep(1_500);
+    const after = await pool_query(`SELECT count(*)::int AS n FROM ledger_entry WHERE operator_id = $1`, [id("cy")]);
+    assert(posts.length === 1, `a double tap sent ${posts.length} requests (keys: ${JSON.stringify(posts)})`);
+    assert(after.n === before.n + 1, `a double tap created ${after.n - before.n} rows`);
+    assert((await c.locator('[data-testid="log-sheet"][open]').count()) === 0, "the second tap fell through and re-opened the sheet");
+    await c.unroute("**/api/entries");
+  });
+  await cyCtx.close();
+
+  const cyDesk = await newContext(main.base, "desktop", "cy");
+  const cd = await cyDesk.newPage();
+  await cd.goto("/");
+  await cd.waitForSelector('[data-testid="desktop-form"]');
+  await check("double click on Log allocation (desktop): one request, and no 'enter a number' error after a successful send", async () => {
+    const posts = [];
+    await cd.route("**/api/entries", (route) => {
+      if (route.request().method() === "POST") posts.push(route.request().headers()["idempotency-key"]);
+      return route.continue();
+    });
+    await cd.locator('[data-testid="desktop-form"] [data-testid="units-input"]').fill("3");
+    await cd.locator('[data-testid="desktop-form"] [data-testid="submit-allocation"]').dblclick();
+    await sleep(1_000);
+    assert(posts.length === 1, `a double click sent ${posts.length} requests`);
+    assert((await cd.locator('[data-testid="desktop-form"] [role="alert"]').count()) === 0, "an error appeared after a successful send");
+    assert((await cd.locator('[data-testid="desktop-form"] [data-testid="units-input"]').inputValue()) === "", "the field should be empty after sending");
+    await cd.unroute("**/api/entries");
+  });
+  await cyDesk.close();
+
   // ======================================================== desktop, operator
   const adaDesk = await newContext(main.base, "desktop", "ada");
   const d = await adaDesk.newPage();
@@ -521,6 +651,21 @@ try {
     assert(!(await s.locator('[data-testid="load-more"]').isVisible()), "Ada's own log fits one page: nothing to page through");
     const html = await s.content();
     assert(!leaksFar(html), "the other site's numbers are on the page");
+  });
+
+  await check("supervisor: choosing an operator in the picker loads their numbers AND their log from the server (no loading state)", async () => {
+    // Ada is the default (first by name), so look at Ben first and then come back, to see real navigations
+    await s.locator('[data-testid="operator-picker"]').selectOption({ label: "Ben Lindqvist" });
+    await s.waitForFunction(() => document.querySelector('[data-testid="metric-card"]')?.textContent?.includes("Ben Lindqvist"));
+    assert((await metricText(s)) === "32", `Ben should be 32, got ${await metricText(s)}`);
+    await s.waitForFunction(() => document.querySelector('[data-testid="log-scope-text"]')?.textContent?.includes("Ben"));
+    const benRows = await s.locator('[data-testid="activity-row"]').evaluateAll((els) => els.map((e) => e.textContent));
+    assert(benRows.length === 3 && benRows.every((t) => t.includes("Ben")), `Ben's log should be just his 3 entries: ${benRows.length} rows`);
+    assert(!benRows.some((t) => t.includes("Ada") || t.includes("Cy")), "another operator's row is in Ben's log");
+    await s.locator('[data-testid="operator-picker"]').selectOption({ label: "Ada Okafor" });
+    await s.waitForFunction(() => document.querySelector('[data-testid="metric-card"]')?.textContent?.includes("Ada Okafor"));
+    assert((await metricText(s)) === "125", `Ada should be 125, got ${await metricText(s)}`);
+    assert(new URL(s.url()).searchParams.get("operator") === id("ada"), "the URL should name the operator");
   });
 
   await check("supervisor: a hand-edited URL naming another site's operator falls back to the default and leaks nothing", async () => {
@@ -746,6 +891,79 @@ try {
     await sm.waitForSelector('[data-testid="adjust-dialog"]', { state: "detached" });
   });
   await supPhone.close();
+
+  // ======================================================== the narrowest common phone: 360px
+  const narrowCheck = async (name, page, extra = async () => {}) => {
+    await check(name, async () => {
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert(overflow <= 0, `page is ${overflow}px wider than the screen`);
+      const out = await spills(page);
+      assert(out.length === 0, `${out.length} element(s) poke out of their card: ${JSON.stringify(out.slice(0, 4))}`);
+      const list = await controls(page);
+      const small = list.filter((c) => c.h < 48);
+      assert(small.length === 0, `too small: ${JSON.stringify(small)}`);
+      const offscreen = list.filter((c) => c.x < 0 || c.x + c.w > 360.5);
+      assert(offscreen.length === 0, `controls cut off at 360px: ${JSON.stringify(offscreen)}`);
+      const report = await contrastReport(page);
+      const weak = report.filter((r) => r.ratio < 7).map((r) => `"${r.text}" ${r.ratio.toFixed(2)}:1`);
+      assert(weak.length === 0, `low contrast: ${weak.join("; ")}`);
+      const tiny = report.filter((r) => r.size < 16).map((r) => `"${r.text}" ${r.size}px`);
+      assert(tiny.length === 0, `text under 16px: ${tiny.join("; ")}`);
+      await extra();
+    });
+  };
+
+  const narrowOp = await newContext(main.base, "mobile", "ada", 360);
+  const n1 = await narrowOp.newPage();
+  await n1.goto("/");
+  await n1.waitForSelector('[data-testid="metric-value"]');
+  await shot(n1, "16-360-operator");
+  await narrowCheck("360px operator: the screen fits (no sideways scroll, nothing spills, controls on screen and >= 48px, 7:1, text >= 16px)", n1);
+  await n1.locator('[data-testid="open-log-sheet"]').tap();
+  await n1.waitForSelector('[data-testid="log-sheet"][open]');
+  await n1.locator('[data-testid="log-sheet"] [data-testid="units-input"]').fill("1234567");
+  await shot(n1, "17-360-log-sheet");
+  await narrowCheck("360px operator: the Log allocation sheet fits, with a 7-digit amount typed", n1, async () => {
+    const dlg = await n1.locator('[data-testid="log-sheet"]').boundingBox();
+    assert(dlg && dlg.x >= 0 && dlg.x + dlg.width <= 360.5, `the sheet is cut off: ${JSON.stringify(dlg)}`);
+    const submit = await n1.locator('[data-testid="log-sheet"] [data-testid="submit-allocation"]').boundingBox();
+    assert(submit && submit.y >= 0 && submit.y + submit.height <= 740 + 0.5, `Log allocation is off screen: ${JSON.stringify(submit)}`);
+  });
+  await n1.locator('[data-testid="sheet-close"]').tap();
+  await narrowOp.close();
+
+  const narrowBig = await newContext(main.base, "mobile", "big", 360);
+  const n2 = await narrowBig.newPage();
+  await n2.goto("/");
+  await n2.waitForSelector('[data-testid="metric-value"]');
+  await shot(n2, "18-360-huge-number");
+  await narrowCheck("360px operator with a 7-digit total and a very long name: the 72px number, name and row units stay inside their cards", n2, async () => {
+    assert((await metricText(n2)).replace(/\D/g, "") === "1234567", `metric reads ${await metricText(n2)}`);
+  });
+  await narrowBig.close();
+
+  const narrowSup = await newContext(main.base, "mobile", "eli", 360);
+  const n3 = await narrowSup.newPage();
+  await n3.goto(`/?operator=${id("ada")}`);
+  await n3.waitForSelector('[data-testid="log-scope"]');
+  await shot(n3, "19-360-supervisor");
+  await narrowCheck("360px supervisor: picker, filter toggle and log fit", n3);
+  await (await revealRow(n3, "+60")).locator('[data-testid="adjust-button"]').tap();
+  await n3.waitForSelector('[data-testid="adjust-dialog"][open]');
+  await n3.waitForTimeout(300);
+  await n3.locator('[data-testid="adjust-amount"]').fill("1234567");
+  await shot(n3, "20-360-adjust-sheet");
+  await narrowCheck("360px supervisor: the adjust sheet fits, its buttons stay in thumb reach", n3, async () => {
+    const view = n3.viewportSize();
+    const dlg = await n3.locator('[data-testid="adjust-dialog"]').boundingBox();
+    assert(dlg && dlg.x >= 0 && dlg.x + dlg.width <= 360.5 && Math.abs(dlg.y + dlg.height - view.height) <= 1, `the sheet is not flush with the screen: ${JSON.stringify(dlg)}`);
+    for (const testid of ["adjust-save", "adjust-cancel"]) {
+      const b = await n3.locator(`[data-testid="${testid}"]`).boundingBox();
+      assert(b && b.y >= dlg.y && b.y + b.height <= view.height + 0.5, `${testid} is not on screen inside the sheet (y=${b?.y}, h=${b?.height}, screen ${view.height})`);
+    }
+  });
+  await n3.locator('[data-testid="adjust-cancel"]').tap();
+  await narrowSup.close();
 
   // ======================================================== expiry at the exact moment (poll interval 60 s, so only the scheduled refetch can do it)
   await check("expiry: the number and status change at the exact moment an entry expires, not at the next poll (poll is 60 s here)", async () => {

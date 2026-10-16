@@ -26,6 +26,8 @@ export function LogAllocationForm({
 }) {
   const [text, setText] = useState("");
   const [showError, setShowError] = useState(false);
+  // Right after a send the field is empty on purpose: a second tap of a double tap is not a typo.
+  const [justSent, setJustSent] = useState(false);
   const units = parseUnits(text);
   const inputId = `${idPrefix}-units`;
 
@@ -35,12 +37,13 @@ export function LogAllocationForm({
       onSubmit={(e) => {
         e.preventDefault();
         if (units === null) {
-          setShowError(true);
+          if (!justSent) setShowError(true);
           return;
         }
         onSubmit(units);
         setText("");
         setShowError(false);
+        setJustSent(true);
       }}
     >
       <label htmlFor={inputId} className={LABEL}>
@@ -58,6 +61,7 @@ export function LogAllocationForm({
         onChange={(e) => {
           setText(e.target.value.replace(/\D/g, "").slice(0, 7));
           setShowError(false);
+          setJustSent(false);
         }}
         aria-invalid={showError && units === null}
         aria-describedby={showError && units === null ? `${inputId}-error` : undefined}
@@ -78,13 +82,17 @@ export function LogAllocationForm({
             onClick={() => {
               setText(String((units ?? 0) + n));
               setShowError(false);
+              setJustSent(false);
             }}
             className={`${BTN_SECONDARY} !px-0`}
           >
             +{n}
           </button>
         ))}
-        <button type="button" data-testid="quick-clear" onClick={() => setText("")} className={`${BTN_SECONDARY} !px-0`}>
+        <button type="button" data-testid="quick-clear" onClick={() => {
+            setText("");
+            setJustSent(false);
+          }} className={`${BTN_SECONDARY} !px-0`}>
           Clear
         </button>
       </div>

@@ -77,14 +77,21 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   const isSelf = subject.id === user.id;
   const view = isSupervisor ? "full" : "transitions";
 
+  // Allocations the user sent that the server hasn't answered yet. While any is in flight we don't poll
+  // (a poll could already include it, and the screen adds it on top: a double count).
+  const [outbox, dispatch] = useReducer(outboxReducer, initialOutbox);
+  const sending = pendingUnits(outbox);
+  const writing = sending.length > 0;
+
   // ---- server data, kept fresh ----
-  const metric = useMetric(api, subject.id, data.metric, config.pollMs).data;
+  const metric = useMetric(api, subject.id, data.metric, config.pollMs, writing).data;
   const logAll = data.entriesScope === "pool";
   const log = useEntriesLog(
     api,
     { key: entriesKeyFor(data.entriesScope, subject.id), operatorId: data.entriesScope === "operator" ? subject.id : undefined },
     data.entries,
     config.pollMs,
+    writing,
   );
   const timeline = useTimeline(api, subject.id, view, data.timeline).data;
   const clock = useServerClock(metric.asOf);
@@ -113,7 +120,6 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   }, [track.changed]);
 
   // ---- logging an allocation: instant, safe to retry ----
-  const [outbox, dispatch] = useReducer(outboxReducer, initialOutbox);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   /** Puts a confirmed entry at the top of every cached log it belongs in (pool, its operator, self), and no other. */
@@ -131,7 +137,7 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   const confirmAllocation = useCallback(
     async (key: string, result: WriteResult) => {
       // Replace the guess with the server's own figure; ignore any older in-flight poll.
-      await queryClient.cancelQueries({ queryKey: ["metric", subject.id] });
+      await Promise.all([queryClient.cancelQueries({ queryKey: ["metric", subject.id] }), queryClient.cancelQueries({ queryKey: ["entries"] })]);
       queryClient.setQueryData(["metric", subject.id], result.metric);
       addToLogs(result.entry);
       dispatch({ type: "sent", key }); // same tick as the line above: one render, no dip and no double count
@@ -169,12 +175,17 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
   const logAllocation = (units: number) => {
     const key = newIdempotencyKey();
     dispatch({ type: "add", key, units });
+    // A poll already in flight may be answered after the write commits: drop it.
+    void queryClient.cancelQueries({ queryKey: ["metric", subject.id] });
+    void queryClient.cancelQueries({ queryKey: ["entries"] });
     void sendAllocation(key, units);
   };
   const retryAllocation = (key: string) => {
     const item = outbox.items.find((i) => i.key === key);
     if (!item) return;
     dispatch({ type: "retry", key });
+    void queryClient.cancelQueries({ queryKey: ["metric", subject.id] });
+    void queryClient.cancelQueries({ queryKey: ["entries"] });
     void sendAllocation(key, item.units); // same key: if the first attempt did land, the server just replays it
   };
 
@@ -188,7 +199,7 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
     async (body: AdjustBody, key: string) => {
       const result = await api.postAdjustment(body, key); // throws ApiClientError: the dialog shows it
       const operatorId = result.metric.operator.id;
-      await queryClient.cancelQueries({ queryKey: ["metric", operatorId] });
+      await Promise.all([queryClient.cancelQueries({ queryKey: ["metric", operatorId] }), queryClient.cancelQueries({ queryKey: ["entries"] })]);
       queryClient.setQueryData(["metric", operatorId], result.metric);
       addToLogs(result.entry);
       // Re-reading the history is what lets the page highlight the points that were recalculated.
@@ -204,7 +215,6 @@ function Screen({ data, config }: { data: DashboardData; config: UiConfig }) {
     return names;
   }, [user.id, user.name, operators]);
 
-  const sending = pendingUnits(outbox);
   const shown = isSelf ? applyPendingUnits(metric.operator, sending) : metric.operator;
   const nextExpiry = metric.nextExpiryAt === null ? null : describeExpiry(metric.nextExpiryAt, clock.now);
   const nextExpiryText =

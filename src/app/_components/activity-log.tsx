@@ -86,7 +86,7 @@ function PendingRow({ item, onRetry, onDismiss }: { item: OutboxItem; onRetry: (
       data-state={item.status}
       className={`rounded-xl border-4 border-dashed p-4 ${failed ? "border-danger bg-danger-bg" : "border-ink bg-pending-bg"}`}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
         <p className={`flex min-w-0 flex-wrap items-center gap-2 text-lg font-bold ${failed ? "text-danger" : ""}`}>
           {failed ? <AlertIcon /> : <HourglassIcon />}
           {failed ? "Not sent" : "Syncing…"}
@@ -121,7 +121,7 @@ function EntryRow({ entry, namesById, now, timeZone, canAdjust, onAdjust }: { en
       data-expiry={expiry.kind}
       className="rounded-xl border-4 border-border p-4"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
         <p className="flex min-w-0 flex-wrap items-center gap-x-2 text-lg font-bold">
           {isAdjustment ? <SlidersIcon /> : <PlusIcon />}
           {isAdjustment ? "Adjustment" : "Allocation"}
