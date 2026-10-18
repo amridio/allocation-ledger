@@ -10,6 +10,8 @@ This is a **first version**. It is meant to be run, poked at, and challenged. Th
   <img src="docs/screenshots/03-error-capacity-360.png" alt="The pool is full: the allocation is refused and the total put back" width="220">
 </p>
 
+**Short on time?** Read the [Trade-Off Document](docs/TRADE-OFFS.md): the ambiguities we found in the brief, our assumptions, and why the database and screen are designed this way.
+
 **Contents:** [Run it](#run-it-one-command) · [Try it in 10 minutes](#try-it-in-10-minutes) · [Key decisions](#key-decisions) · [Concurrency test result](#concurrency-test-result) · [Assumptions to confirm](#assumptions-to-confirm-with-the-client) · [Trade-offs](#trade-offs-in-this-first-version) · [Next steps](#next-steps) · [Reference](#reference)
 
 ## Run it (one command)
